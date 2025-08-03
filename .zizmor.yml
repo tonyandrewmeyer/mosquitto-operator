@@ -1,0 +1,6 @@
+# Zizmor configuration for GitHub Actions security analysis
+# See https://docs.zizmor.sh/usage/
+
+rules:
+  # Enable all default rules
+  - id: "*"

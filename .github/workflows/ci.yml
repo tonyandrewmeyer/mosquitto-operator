@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+    
+    - name: Set up Python
+      run: uv python install 3.10
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv run pip install tox
+    
+    - name: Run linting
+      run: uv run tox -e lint
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+    
+    - name: Set up Python
+      run: uv python install 3.10
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv run pip install tox
+    
+    - name: Run unit tests
+      run: uv run tox -e unit
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+    
+    - name: Set up Python
+      run: uv python install 3.10
+    
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv run pip install tox
+    
+    - name: Set up Juju
+      run: |
+        sudo snap install juju --classic
+        sudo snap install concierge --classic
+        concierge prepare -p dev
+    
+    - name: Run integration tests
+      run: uv run tox -e integration

@@ -1,0 +1,84 @@
+# This file configures Charmcraft.
+# See https://canonical-charmcraft.readthedocs-hosted.com/en/stable/reference/files/charmcraft-yaml-file/
+type: charm
+name: mosquitto-operator
+title: Mosquitto MQTT Broker
+summary: Eclipse Mosquitto MQTT message broker for IoT and messaging applications.
+description: |
+  Eclipse Mosquitto is an open-source MQTT message broker that provides a lightweight
+  method of carrying out messaging using a publish/subscribe model.
+
+  This charm deploys and configures Mosquitto to provide reliable MQTT messaging
+  services with support for authentication, TLS encryption, and persistence.
+
+  Mosquitto is ideal for Internet of Things (IoT) applications, mobile messaging,
+  and scenarios requiring lightweight publish/subscribe messaging between devices
+  and applications.
+
+# Documentation:
+# https://canonical-charmcraft.readthedocs-hosted.com/en/stable/howto/build-guides/select-platforms/
+base: ubuntu@22.04
+platforms:
+  amd64:
+  arm64:
+
+
+parts:
+  charm:
+    plugin: charm
+    source: .
+
+# (Optional) Configuration options for the charm
+# This config section defines charm config options, and populates the Configure
+# tab on Charmhub.
+# More information on this section at:
+# https://canonical-charmcraft.readthedocs-hosted.com/en/stable/reference/files/charmcraft-yaml-file/#config
+# General configuration documentation:
+# https://canonical-juju.readthedocs-hosted.com/en/latest/user/reference/configuration/#application-configuration
+config:
+  options:
+    port:
+      description: |
+        The network port that the MQTT broker will listen on for standard
+        MQTT connections.
+      default: 1883
+      type: int
+    websockets-port:
+      description: |
+        The network port for MQTT over WebSockets. Set to 0 to disable.
+      default: 9001
+      type: int
+    max-connections:
+      description: |
+        The maximum number of concurrent client connections. Set to -1 for unlimited.
+      default: -1
+      type: int
+    allow-anonymous:
+      description: |
+        Whether to allow clients to connect without providing credentials.
+      default: false
+      type: boolean
+    log-level:
+      description: |
+        The logging level for Mosquitto.
+        
+        Acceptable values are: "error", "warning", "notice", "information", "debug"
+      default: "notice"
+      type: string
+    persistence:
+      description: |
+        Whether to enable message persistence to disk.
+      default: true
+      type: boolean
+    message-size-limit:
+      description: |
+        Maximum message size in bytes. Set to 0 for unlimited.
+      default: 268435456
+      type: int
+
+# Actions that can be run on deployed units
+actions:
+  restart:
+    description: Restart the Mosquitto service
+  get-status:
+    description: Get detailed status information about the Mosquitto service
