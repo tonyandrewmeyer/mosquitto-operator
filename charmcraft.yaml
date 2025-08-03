@@ -107,6 +107,18 @@ requires:
     optional: true
     description: |
       SASL authentication integration for client authentication.
+  charm-tracing:
+    interface: tracing
+    limit: 1
+    optional: true
+    description: |
+      Sends tracing data to a tracing backend for observability.
+  receive-ca-cert:
+    interface: certificate_transfer
+    limit: 1
+    optional: true
+    description: |
+      Receive CA certificate for secure tracing connections.
 
 provides:
   metrics:

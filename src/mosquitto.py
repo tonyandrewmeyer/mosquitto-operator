@@ -16,10 +16,13 @@ import tempfile
 import time
 from typing import TYPE_CHECKING
 
+import opentelemetry.trace
+
 if TYPE_CHECKING:
     from charm import MosquittoConfig
 
 logger = logging.getLogger(__name__)
+tracer = opentelemetry.trace.get_tracer(__name__)
 
 MOSQUITTO_CONFIG_PATH = pathlib.Path("/etc/mosquitto/mosquitto.conf")
 MOSQUITTO_DATA_DIR = pathlib.Path("/var/lib/mosquitto")
@@ -31,12 +34,20 @@ MOSQUITTO_BACKUP_DIR = pathlib.Path("/var/backup/mosquitto")
 
 def install() -> None:
     """Install Mosquitto MQTT broker using apt."""
-    logger.info("Installing Mosquitto MQTT broker")
-    subprocess.run(["apt", "update"], check=True, capture_output=True)
+    with tracer.start_as_current_span("mosquitto_install_packages"):
+        span = opentelemetry.trace.get_current_span()
+        logger.info("Installing Mosquitto MQTT broker")
+        span.add_event("Starting package installation")
 
-    subprocess.run(
-        ["apt", "install", "-y", "mosquitto", "mosquitto-clients"], check=True, capture_output=True
-    )
+        subprocess.run(["apt", "update"], check=True, capture_output=True)
+        span.add_event("APT update completed")
+
+        subprocess.run(
+            ["apt", "install", "-y", "mosquitto", "mosquitto-clients"],
+            check=True,
+            capture_output=True,
+        )
+        span.add_event("Mosquitto packages installed")
 
     # Ensure directories exist
     MOSQUITTO_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -271,50 +282,64 @@ def get_status() -> dict[str, str]:
 
 def backup(backup_name: str | None = None) -> str:
     """Create a backup of Mosquitto data and configuration."""
-    if backup_name is None:
-        backup_name = f"mosquitto-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    with tracer.start_as_current_span("mosquitto_backup_operation"):
+        span = opentelemetry.trace.get_current_span()
 
-    backup_path = MOSQUITTO_BACKUP_DIR / backup_name
-    backup_path.mkdir(parents=True, exist_ok=True)
+        if backup_name is None:
+            backup_name = f"mosquitto-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
-    logger.info(f"Creating backup: {backup_name}")
+        backup_path = MOSQUITTO_BACKUP_DIR / backup_name
+        backup_path.mkdir(parents=True, exist_ok=True)
 
-    # Stop service for consistent backup
-    stop()
+        span.set_attribute("backup.name", backup_name)
+        span.set_attribute("backup.path", str(backup_path))
+        logger.info(f"Creating backup: {backup_name}")
+        span.add_event("Starting backup operation")
 
-    try:
-        # Backup configuration
-        config_backup = backup_path / "config"
-        config_backup.mkdir(exist_ok=True)
-        shutil.copy2(MOSQUITTO_CONFIG_PATH, config_backup)
+        # Stop service for consistent backup
+        stop()
+        span.add_event("Service stopped for backup")
 
-        # Backup authentication files if they exist
-        if MOSQUITTO_AUTH_DIR.exists():
-            shutil.copytree(MOSQUITTO_AUTH_DIR, config_backup / "auth", dirs_exist_ok=True)
+        try:
+            # Backup configuration
+            config_backup = backup_path / "config"
+            config_backup.mkdir(exist_ok=True)
+            shutil.copy2(MOSQUITTO_CONFIG_PATH, config_backup)
+            span.add_event("Configuration backed up")
 
-        # Backup certificates if they exist
-        if MOSQUITTO_CERTS_DIR.exists():
-            shutil.copytree(MOSQUITTO_CERTS_DIR, config_backup / "certs", dirs_exist_ok=True)
+            # Backup authentication files if they exist
+            if MOSQUITTO_AUTH_DIR.exists():
+                shutil.copytree(MOSQUITTO_AUTH_DIR, config_backup / "auth", dirs_exist_ok=True)
+                span.add_event("Authentication files backed up")
 
-        # Backup persistent data
-        if MOSQUITTO_DATA_DIR.exists():
-            data_backup = backup_path / "data"
-            shutil.copytree(MOSQUITTO_DATA_DIR, data_backup, dirs_exist_ok=True)
+            # Backup certificates if they exist
+            if MOSQUITTO_CERTS_DIR.exists():
+                shutil.copytree(MOSQUITTO_CERTS_DIR, config_backup / "certs", dirs_exist_ok=True)
+                span.add_event("Certificates backed up")
 
-        # Create backup metadata
-        metadata = backup_path / "metadata.txt"
-        metadata.write_text(
-            f"Backup created: {datetime.datetime.now().isoformat()}\n"
-            f"Mosquitto version: {get_version()}\n"
-            f"Backup name: {backup_name}\n"
-        )
+            # Backup persistent data
+            if MOSQUITTO_DATA_DIR.exists():
+                data_backup = backup_path / "data"
+                shutil.copytree(MOSQUITTO_DATA_DIR, data_backup, dirs_exist_ok=True)
+                span.add_event("Persistent data backed up")
 
-        logger.info(f"Backup completed: {backup_path}")
-        return str(backup_path)
+            # Create backup metadata
+            metadata = backup_path / "metadata.txt"
+            metadata.write_text(
+                f"Backup created: {datetime.datetime.now().isoformat()}\n"
+                f"Mosquitto version: {get_version()}\n"
+                f"Backup name: {backup_name}\n"
+            )
+            span.add_event("Backup metadata created")
 
-    finally:
-        # Restart service
-        start()
+            logger.info(f"Backup completed: {backup_path}")
+            span.add_event("Backup operation completed successfully")
+            return str(backup_path)
+
+        finally:
+            # Restart service
+            start()
+            span.add_event("Service restarted after backup")
 
 
 def restore(backup_name: str) -> None:
@@ -572,11 +597,11 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
-    
+
     def collect_metrics(self) -> str:
         """Collect Mosquitto metrics and format for Prometheus."""
         metrics = []
-        
+
         # Service status metric
         try:
             result = subprocess.run(
@@ -587,7 +612,7 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             metrics.append(f"mosquitto_service_up {service_up}")
         except Exception:
             metrics.append("mosquitto_service_up 0")
-        
+
         # Connection count
         try:
             result = subprocess.run(
@@ -599,7 +624,7 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             metrics.append(f"mosquitto_connections_current {connection_count}")
         except Exception:
             metrics.append("mosquitto_connections_current 0")
-        
+
         # Format as Prometheus metrics
         output = []
         output.append("# HELP mosquitto_service_up Whether Mosquitto service is running")
@@ -608,7 +633,7 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
         output.append("# TYPE mosquitto_connections_current gauge")
         output.extend(metrics)
         output.append("")
-        
+
         return "\\n".join(output)
 
 

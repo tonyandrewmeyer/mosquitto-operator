@@ -7,12 +7,14 @@
 import logging
 from dataclasses import dataclass
 
+import opentelemetry.trace
 import ops
 
 # A standalone module for workload-specific logic (no charming concerns):
 import mosquitto
 
 logger = logging.getLogger(__name__)
+tracer = opentelemetry.trace.get_tracer(__name__)
 
 
 @dataclass
@@ -85,6 +87,14 @@ class MosquittoOperatorCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
+
+        # Initialize tracing
+        self.tracing = ops.tracing.Tracing(
+            self,
+            tracing_relation_name="charm-tracing",
+            ca_relation_name="receive-ca-cert",
+        )
+
         framework.observe(self.on.install, self._on_install)
         framework.observe(self.on.start, self._on_start)
         framework.observe(self.on.config_changed, self._on_config_changed)
@@ -153,27 +163,59 @@ class MosquittoOperatorCharm(ops.CharmBase):
 
     def _on_install(self, event: ops.InstallEvent):
         """Install the workload on the machine."""
-        self.unit.status = ops.MaintenanceStatus("installing Mosquitto")
-        mosquitto.install()
+        with tracer.start_as_current_span("mosquitto_install"):
+            span = opentelemetry.trace.get_current_span()
+            span.add_event("Starting Mosquitto installation")
+
+            self.unit.status = ops.MaintenanceStatus("installing Mosquitto")
+            mosquitto.install()
+
+            span.add_event("Mosquitto installation completed")
 
     def _on_start(self, event: ops.StartEvent):
         """Handle start event."""
-        self.unit.status = ops.MaintenanceStatus("starting Mosquitto")
-        config = self._get_mosquitto_config()
-        mosquitto.configure(config)
-        mosquitto.start()
-        version = mosquitto.get_version()
-        if version is not None:
-            self.unit.set_workload_version(version)
-        self.unit.status = ops.ActiveStatus("Mosquitto is running")
+        with tracer.start_as_current_span("mosquitto_start"):
+            span = opentelemetry.trace.get_current_span()
+            span.add_event("Starting Mosquitto service")
+
+            self.unit.status = ops.MaintenanceStatus("starting Mosquitto")
+            config = self._get_mosquitto_config()
+
+            # Add configuration details to trace
+            span.set_attribute("mosquitto.port", config.port)
+            span.set_attribute("mosquitto.tls_enabled", config.tls_port > 0)
+            span.set_attribute("mosquitto.websockets_enabled", config.websockets_port > 0)
+            span.set_attribute("mosquitto.anonymous_allowed", config.allow_anonymous)
+
+            mosquitto.configure(config)
+            mosquitto.start()
+            version = mosquitto.get_version()
+            if version is not None:
+                self.unit.set_workload_version(version)
+                span.set_attribute("mosquitto.version", version)
+
+            self.unit.status = ops.ActiveStatus("Mosquitto is running")
+            span.add_event("Mosquitto service started successfully")
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent):
         """Handle configuration changes."""
-        self.unit.status = ops.MaintenanceStatus("updating configuration")
-        config = self._get_mosquitto_config()
-        mosquitto.configure(config)
-        mosquitto.restart()
-        self.unit.status = ops.ActiveStatus("Mosquitto is running")
+        with tracer.start_as_current_span("mosquitto_config_changed"):
+            span = opentelemetry.trace.get_current_span()
+            span.add_event("Configuration change triggered")
+
+            self.unit.status = ops.MaintenanceStatus("updating configuration")
+            config = self._get_mosquitto_config()
+
+            # Log configuration changes for tracing
+            span.set_attribute("mosquitto.port", config.port)
+            span.set_attribute("mosquitto.tls_enabled", config.tls_port > 0)
+            span.set_attribute("mosquitto.auth_enabled", not config.allow_anonymous)
+
+            mosquitto.configure(config)
+            mosquitto.restart()
+            self.unit.status = ops.ActiveStatus("Mosquitto is running")
+
+            span.add_event("Configuration update completed")
 
     def _on_stop(self, event: ops.StopEvent):
         """Handle stop event."""
@@ -192,38 +234,67 @@ class MosquittoOperatorCharm(ops.CharmBase):
 
     def _on_backup_action(self, event: ops.ActionEvent):
         """Handle backup action."""
-        backup_name = event.params.get("backup-name")
-        try:
-            result = mosquitto.backup(backup_name)
-            event.set_results({"backup-path": result, "status": "success"})
-        except Exception as e:
-            event.fail(f"Backup failed: {e}")
+        with tracer.start_as_current_span("mosquitto_backup"):
+            span = opentelemetry.trace.get_current_span()
+            backup_name = event.params.get("backup-name")
+
+            span.set_attribute("backup.name", backup_name or "auto-generated")
+            span.add_event("Starting backup operation")
+
+            try:
+                result = mosquitto.backup(backup_name)
+                span.set_attribute("backup.path", result)
+                span.add_event("Backup completed successfully")
+                event.set_results({"backup-path": result, "status": "success"})
+            except Exception as e:
+                span.add_event("Backup failed", {"error": str(e)})
+                span.set_attribute("backup.error", str(e))
+                event.fail(f"Backup failed: {e}")
 
     def _on_restore_action(self, event: ops.ActionEvent):
         """Handle restore action."""
-        backup_name = event.params["backup-name"]
-        try:
-            mosquitto.restore(backup_name)
-            event.set_results({"status": "success", "message": f"Restored from {backup_name}"})
-        except Exception as e:
-            event.fail(f"Restore failed: {e}")
+        with tracer.start_as_current_span("mosquitto_restore"):
+            span = opentelemetry.trace.get_current_span()
+            backup_name = event.params["backup-name"]
+
+            span.set_attribute("restore.backup_name", backup_name)
+            span.add_event("Starting restore operation")
+
+            try:
+                mosquitto.restore(backup_name)
+                span.add_event("Restore completed successfully")
+                event.set_results({"status": "success", "message": f"Restored from {backup_name}"})
+            except Exception as e:
+                span.add_event("Restore failed", {"error": str(e)})
+                span.set_attribute("restore.error", str(e))
+                event.fail(f"Restore failed: {e}")
 
     def _on_generate_client_cert_action(self, event: ops.ActionEvent):
         """Handle generate-client-cert action."""
-        client_name = event.params["client-name"]
-        output_path = event.params.get("output-path", "/tmp")
-        try:
-            cert_files = mosquitto.generate_client_cert(client_name, output_path)
-            event.set_results(
-                {
-                    "status": "success",
-                    "client-cert": cert_files["cert"],
-                    "client-key": cert_files["key"],
-                    "ca-cert": cert_files["ca"],
-                }
-            )
-        except Exception as e:
-            event.fail(f"Certificate generation failed: {e}")
+        with tracer.start_as_current_span("generate_client_cert"):
+            span = opentelemetry.trace.get_current_span()
+            client_name = event.params["client-name"]
+            output_path = event.params.get("output-path", "/tmp")
+
+            span.set_attribute("cert.client_name", client_name)
+            span.set_attribute("cert.output_path", output_path)
+            span.add_event("Starting client certificate generation")
+
+            try:
+                cert_files = mosquitto.generate_client_cert(client_name, output_path)
+                span.add_event("Client certificate generated successfully")
+                event.set_results(
+                    {
+                        "status": "success",
+                        "client-cert": cert_files["cert"],
+                        "client-key": cert_files["key"],
+                        "ca-cert": cert_files["ca"],
+                    }
+                )
+            except Exception as e:
+                span.add_event("Certificate generation failed", {"error": str(e)})
+                span.set_attribute("cert.error", str(e))
+                event.fail(f"Certificate generation failed: {e}")
 
     def _on_get_metrics_status_action(self, event: ops.ActionEvent):
         """Handle get-metrics-status action."""
@@ -236,17 +307,26 @@ class MosquittoOperatorCharm(ops.CharmBase):
     # Relation event handlers
     def _on_certificates_relation_joined(self, event: ops.RelationJoinedEvent):
         """Handle certificates relation joined."""
-        logger.info("TLS certificates relation joined")
-        # Request certificates from the CA
-        self._request_certificates()
+        with tracer.start_as_current_span("certificates_relation_joined"):
+            span = opentelemetry.trace.get_current_span()
+            span.add_event("TLS certificates relation joined")
+            logger.info("TLS certificates relation joined")
+            # Request certificates from the CA
+            self._request_certificates()
 
     def _on_certificates_relation_changed(self, event: ops.RelationChangedEvent):
         """Handle certificates relation changed."""
-        logger.info("TLS certificates relation changed")
-        # Process received certificates
-        if self._process_certificates():
-            # Reconfigure with TLS enabled
-            self._reconfigure_with_tls()
+        with tracer.start_as_current_span("certificates_relation_changed"):
+            span = opentelemetry.trace.get_current_span()
+            span.add_event("TLS certificates relation changed")
+            logger.info("TLS certificates relation changed")
+            # Process received certificates
+            if self._process_certificates():
+                span.add_event("Certificates processed, enabling TLS")
+                # Reconfigure with TLS enabled
+                self._reconfigure_with_tls()
+            else:
+                span.add_event("No certificates available yet")
 
     def _on_certificates_relation_departed(self, event: ops.RelationDepartedEvent):
         """Handle certificates relation departed."""
@@ -269,9 +349,12 @@ class MosquittoOperatorCharm(ops.CharmBase):
 
     def _on_metrics_relation_joined(self, event: ops.RelationJoinedEvent):
         """Handle metrics relation joined."""
-        logger.info("Metrics relation joined")
-        # Configure Prometheus metrics endpoint
-        self._configure_metrics_endpoint()
+        with tracer.start_as_current_span("metrics_relation_joined"):
+            span = opentelemetry.trace.get_current_span()
+            span.add_event("Metrics relation joined")
+            logger.info("Metrics relation joined")
+            # Configure Prometheus metrics endpoint
+            self._configure_metrics_endpoint()
 
     def _on_metrics_relation_departed(self, event: ops.RelationDepartedEvent):
         """Handle metrics relation departed."""
