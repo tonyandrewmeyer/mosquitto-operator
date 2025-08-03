@@ -119,8 +119,12 @@ def _add_limits_config(config_lines: list[str], config: "MosquittoConfig") -> No
     if config.max_connections > 0:
         config_lines.append(f"max_connections {config.max_connections}")
 
+    # Only add message_size_limit if it's positive and reasonable
+    # Mosquitto 2.x has limits on message_size_limit values
     if config.message_size_limit > 0:
-        config_lines.append(f"message_size_limit {config.message_size_limit}")
+        # Cap at 10MB to avoid issues with different Mosquitto versions
+        limit = min(config.message_size_limit, 10485760)  # 10MB max
+        config_lines.append(f"message_size_limit {limit}")
 
 
 def _add_auth_config(config_lines: list[str], config: "MosquittoConfig") -> None:

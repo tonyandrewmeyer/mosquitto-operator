@@ -88,7 +88,8 @@ config:
     message-size-limit:
       description: |
         Maximum message size in bytes. Set to 0 for unlimited.
-      default: 268435456
+        Note: Large values may not be supported by all Mosquitto versions.
+      default: 1048576
       type: int
     tls-port:
       description: |

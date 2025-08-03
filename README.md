@@ -111,7 +111,7 @@ juju config mosquitto message-size-limit=134217728
 | `allow-anonymous` | boolean | false | Allow anonymous client connections |
 | `log-level` | string | "notice" | Logging level (error/warning/notice/information/debug) |
 | `persistence` | boolean | true | Enable message persistence |
-| `message-size-limit` | int | 268435456 | Maximum message size in bytes |
+| `message-size-limit` | int | 1048576 | Maximum message size in bytes (1MB) |
 
 ## Relations
 
