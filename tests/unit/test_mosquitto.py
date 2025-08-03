@@ -64,6 +64,8 @@ class TestMosquittoConfiguration:
             log_level="notice",
             persistence=True,
             message_size_limit=1024,
+            tls_port=8883,
+            tls_websockets_port=9002,
         )
 
         mosquitto.configure(config)
@@ -96,6 +98,8 @@ class TestMosquittoConfiguration:
             log_level="debug",
             persistence=False,
             message_size_limit=0,
+            tls_port=0,  # Disabled
+            tls_websockets_port=0,  # Disabled
         )
 
         mosquitto.configure(config)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from jubilant import Juju, temp_model
+from jubilant import temp_model
 
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
@@ -32,9 +32,9 @@ class TestMosquittoCharmIntegration:
         return str(charm_files[0])
 
     def _deploy_and_wait(self, juju, charm_file):
-        """Helper method to deploy charm and wait for it to be active."""
+        """Deploy charm and wait for it to be active."""
         # Ensure local charm path starts with ./ for juju
-        if not charm_file.startswith('./'):
+        if not charm_file.startswith("./"):
             charm_file = f"./{charm_file}"
         juju.deploy(charm_file, app=APP_NAME)
         juju.wait_for_idle([APP_NAME], status="active", timeout=600)
@@ -55,7 +55,7 @@ class TestMosquittoCharmIntegration:
         """Test that Mosquitto service is actually running."""
         with temp_model() as juju:
             self._deploy_and_wait(juju, charm_file)
-            
+
             # Check that mosquitto process is running on the unit
             result = juju.ssh(f"{APP_NAME}/0", ["systemctl", "is-active", "mosquitto"])
             assert result.stdout.strip() == "active"
@@ -64,7 +64,7 @@ class TestMosquittoCharmIntegration:
         """Test that Mosquitto is listening on the configured port."""
         with temp_model() as juju:
             self._deploy_and_wait(juju, charm_file)
-            
+
             # Check that port 1883 is listening
             result = juju.ssh(f"{APP_NAME}/0", ["ss", "-tlnp", "|", "grep", ":1883"])
             assert ":1883" in result.stdout

@@ -142,13 +142,15 @@ class TestMosquittoOperatorCharm:
             ({"port": 8883, "allow-anonymous": False}, 8883, False),
         ],
     )
-    def test_mosquitto_config_creation(self, config_values, expected_port, expected_anonymous, monkeypatch: pytest.MonkeyPatch):
+    def test_mosquitto_config_creation(
+        self, config_values, expected_port, expected_anonymous, monkeypatch: pytest.MonkeyPatch
+    ):
         """Test that MosquittoConfig is created correctly from charm config."""
         # Arrange:
         ctx = testing.Context(MosquittoOperatorCharm)
         monkeypatch.setattr("charm.mosquitto.configure", mock_configure)
         monkeypatch.setattr("charm.mosquitto.restart", mock_restart)
-        
+
         # Mock the config
         config = {
             "port": expected_port,

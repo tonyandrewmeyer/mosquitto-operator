@@ -75,6 +75,45 @@ config:
         Maximum message size in bytes. Set to 0 for unlimited.
       default: 268435456
       type: int
+    tls-port:
+      description: |
+        The network port for TLS-encrypted MQTT connections. Set to 0 to disable.
+      default: 8883
+      type: int
+    tls-websockets-port:
+      description: |
+        The network port for TLS-encrypted MQTT over WebSockets. Set to 0 to disable.
+      default: 9002
+      type: int
+
+# Storage configuration
+storage:
+  persistence:
+    description: |
+      Storage for persistent MQTT message data and configuration.
+    type: filesystem
+    minimum-size: 1G
+    location: /var/lib/mosquitto
+
+# Relations with other charms
+requires:
+  certificates:
+    interface: tls-certificates
+    optional: true
+    description: |
+      Obtain TLS certificates from a Certificate Authority for secure MQTT connections.
+  sasl:
+    interface: sasl
+    optional: true
+    description: |
+      SASL authentication integration for client authentication.
+
+provides:
+  metrics:
+    interface: prometheus_scrape
+    optional: true
+    description: |
+      Prometheus metrics endpoint for monitoring Mosquitto performance and status.
 
 # Actions that can be run on deployed units
 actions:
@@ -82,3 +121,29 @@ actions:
     description: Restart the Mosquitto service
   get-status:
     description: Get detailed status information about the Mosquitto service
+  backup:
+    description: Create a backup of persistent data and configuration
+    params:
+      backup-name:
+        type: string
+        description: Name for the backup (defaults to timestamp)
+  restore:
+    description: Restore from a backup
+    params:
+      backup-name:
+        type: string
+        description: Name of the backup to restore
+    required:
+      - backup-name
+  generate-client-cert:
+    description: Generate a client certificate for MQTT authentication
+    params:
+      client-name:
+        type: string
+        description: Common name for the client certificate
+      output-path:
+        type: string
+        description: Path where certificate files will be stored
+        default: "/tmp"
+    required:
+      - client-name

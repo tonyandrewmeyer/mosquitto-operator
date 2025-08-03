@@ -6,9 +6,13 @@
 The intention is that this module could be used outside the context of a charm.
 """
 
+import datetime
 import logging
+import os
 import pathlib
+import shutil
 import subprocess
+import tempfile
 import time
 from typing import TYPE_CHECKING
 
@@ -20,6 +24,9 @@ logger = logging.getLogger(__name__)
 MOSQUITTO_CONFIG_PATH = pathlib.Path("/etc/mosquitto/mosquitto.conf")
 MOSQUITTO_DATA_DIR = pathlib.Path("/var/lib/mosquitto")
 MOSQUITTO_LOG_DIR = pathlib.Path("/var/log/mosquitto")
+MOSQUITTO_CERTS_DIR = pathlib.Path("/etc/mosquitto/certs")
+MOSQUITTO_AUTH_DIR = pathlib.Path("/etc/mosquitto/auth")
+MOSQUITTO_BACKUP_DIR = pathlib.Path("/var/backup/mosquitto")
 
 
 def install() -> None:
@@ -76,6 +83,17 @@ def _generate_config(config: "MosquittoConfig") -> str:
         f"log_type {config.log_level}",
     ]
 
+    _add_persistence_config(config_lines, config)
+    _add_limits_config(config_lines, config)
+    _add_auth_config(config_lines, config)
+    _add_websocket_config(config_lines, config)
+    _add_tls_config(config_lines, config)
+
+    return "\n".join(config_lines) + "\n"
+
+
+def _add_persistence_config(config_lines: list[str], config: "MosquittoConfig") -> None:
+    """Add persistence configuration to config lines."""
     if config.persistence:
         config_lines.extend(
             [
@@ -86,14 +104,29 @@ def _generate_config(config: "MosquittoConfig") -> str:
     else:
         config_lines.append("persistence false")
 
+
+def _add_limits_config(config_lines: list[str], config: "MosquittoConfig") -> None:
+    """Add connection and message limits to config lines."""
     if config.max_connections > 0:
         config_lines.append(f"max_connections {config.max_connections}")
 
     if config.message_size_limit > 0:
         config_lines.append(f"message_size_limit {config.message_size_limit}")
 
+
+def _add_auth_config(config_lines: list[str], config: "MosquittoConfig") -> None:
+    """Add authentication configuration to config lines."""
     config_lines.append(f"allow_anonymous {str(config.allow_anonymous).lower()}")
 
+    if config.password_file_path:
+        config_lines.append(f"password_file {config.password_file_path}")
+
+    if config.acl_file_path:
+        config_lines.append(f"acl_file {config.acl_file_path}")
+
+
+def _add_websocket_config(config_lines: list[str], config: "MosquittoConfig") -> None:
+    """Add WebSocket listener configuration to config lines."""
     if config.websockets_port > 0:
         config_lines.extend(
             [
@@ -103,7 +136,40 @@ def _generate_config(config: "MosquittoConfig") -> str:
             ]
         )
 
-    return "\n".join(config_lines) + "\n"
+
+def _add_tls_config(config_lines: list[str], config: "MosquittoConfig") -> None:
+    """Add TLS configuration to config lines."""
+    # TLS listener
+    if config.tls_port > 0 and config.server_cert_path and config.server_key_path:
+        config_lines.extend(
+            [
+                "",
+                "# TLS listener",
+                f"listener {config.tls_port}",
+                f"certfile {config.server_cert_path}",
+                f"keyfile {config.server_key_path}",
+            ]
+        )
+
+        if config.ca_cert_path:
+            config_lines.append(f"cafile {config.ca_cert_path}")
+            config_lines.append("require_certificate true")
+
+    # TLS WebSocket listener
+    if config.tls_websockets_port > 0 and config.server_cert_path and config.server_key_path:
+        config_lines.extend(
+            [
+                "",
+                "# TLS WebSocket listener",
+                f"listener {config.tls_websockets_port}",
+                "protocol websockets",
+                f"certfile {config.server_cert_path}",
+                f"keyfile {config.server_key_path}",
+            ]
+        )
+
+        if config.ca_cert_path:
+            config_lines.append(f"cafile {config.ca_cert_path}")
 
 
 def start() -> None:
@@ -201,3 +267,279 @@ def get_status() -> dict[str, str]:
     except subprocess.SubprocessError:
         logger.exception("Failed to get Mosquitto status")
         return {"service-status": "unknown", "error": "Failed to get status"}
+
+
+def backup(backup_name: str | None = None) -> str:
+    """Create a backup of Mosquitto data and configuration."""
+    if backup_name is None:
+        backup_name = f"mosquitto-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+    backup_path = MOSQUITTO_BACKUP_DIR / backup_name
+    backup_path.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Creating backup: {backup_name}")
+
+    # Stop service for consistent backup
+    stop()
+
+    try:
+        # Backup configuration
+        config_backup = backup_path / "config"
+        config_backup.mkdir(exist_ok=True)
+        shutil.copy2(MOSQUITTO_CONFIG_PATH, config_backup)
+
+        # Backup authentication files if they exist
+        if MOSQUITTO_AUTH_DIR.exists():
+            shutil.copytree(MOSQUITTO_AUTH_DIR, config_backup / "auth", dirs_exist_ok=True)
+
+        # Backup certificates if they exist
+        if MOSQUITTO_CERTS_DIR.exists():
+            shutil.copytree(MOSQUITTO_CERTS_DIR, config_backup / "certs", dirs_exist_ok=True)
+
+        # Backup persistent data
+        if MOSQUITTO_DATA_DIR.exists():
+            data_backup = backup_path / "data"
+            shutil.copytree(MOSQUITTO_DATA_DIR, data_backup, dirs_exist_ok=True)
+
+        # Create backup metadata
+        metadata = backup_path / "metadata.txt"
+        metadata.write_text(
+            f"Backup created: {datetime.datetime.now().isoformat()}\n"
+            f"Mosquitto version: {get_version()}\n"
+            f"Backup name: {backup_name}\n"
+        )
+
+        logger.info(f"Backup completed: {backup_path}")
+        return str(backup_path)
+
+    finally:
+        # Restart service
+        start()
+
+
+def restore(backup_name: str) -> None:
+    """Restore from a backup."""
+    backup_path = MOSQUITTO_BACKUP_DIR / backup_name
+
+    if not backup_path.exists():
+        raise RuntimeError(f"Backup not found: {backup_name}")
+
+    logger.info(f"Restoring from backup: {backup_name}")
+
+    # Stop service
+    stop()
+
+    try:
+        # Restore configuration
+        config_backup = backup_path / "config"
+        if (config_backup / "mosquitto.conf").exists():
+            shutil.copy2(config_backup / "mosquitto.conf", MOSQUITTO_CONFIG_PATH)
+
+        # Restore authentication files
+        auth_backup = config_backup / "auth"
+        if auth_backup.exists():
+            if MOSQUITTO_AUTH_DIR.exists():
+                shutil.rmtree(MOSQUITTO_AUTH_DIR)
+            shutil.copytree(auth_backup, MOSQUITTO_AUTH_DIR)
+
+        # Restore certificates
+        certs_backup = config_backup / "certs"
+        if certs_backup.exists():
+            if MOSQUITTO_CERTS_DIR.exists():
+                shutil.rmtree(MOSQUITTO_CERTS_DIR)
+            shutil.copytree(certs_backup, MOSQUITTO_CERTS_DIR)
+
+        # Restore persistent data
+        data_backup = backup_path / "data"
+        if data_backup.exists():
+            if MOSQUITTO_DATA_DIR.exists():
+                shutil.rmtree(MOSQUITTO_DATA_DIR)
+            shutil.copytree(data_backup, MOSQUITTO_DATA_DIR)
+
+        # Fix ownership
+        subprocess.run(
+            ["chown", "-R", "mosquitto:mosquitto", str(MOSQUITTO_DATA_DIR)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["chown", "-R", "mosquitto:mosquitto", str(MOSQUITTO_AUTH_DIR)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["chown", "-R", "mosquitto:mosquitto", str(MOSQUITTO_CERTS_DIR)],
+            check=True,
+            capture_output=True,
+        )
+
+        logger.info(f"Restore completed from: {backup_name}")
+
+    finally:
+        # Restart service
+        start()
+
+
+def generate_client_cert(client_name: str, output_path: str) -> dict[str, str]:
+    """Generate client certificate for MQTT authentication."""
+    output_dir = pathlib.Path(output_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check if CA exists
+    ca_cert = MOSQUITTO_CERTS_DIR / "ca.crt"
+    ca_key = MOSQUITTO_CERTS_DIR / "ca.key"
+
+    if not ca_cert.exists() or not ca_key.exists():
+        raise RuntimeError("CA certificate not found. TLS must be configured first.")
+
+    # Generate client private key
+    client_key_path = output_dir / f"{client_name}.key"
+    subprocess.run(
+        ["openssl", "genrsa", "-out", str(client_key_path), "2048"],
+        check=True,
+        capture_output=True,
+    )
+
+    # Generate certificate signing request
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csr", delete=False) as csr_file:
+        csr_path = csr_file.name
+
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-new",
+                "-key",
+                str(client_key_path),
+                "-out",
+                csr_path,
+                "-subj",
+                f"/CN={client_name}",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        # Sign the certificate
+        client_cert_path = output_dir / f"{client_name}.crt"
+        subprocess.run(
+            [
+                "openssl",
+                "x509",
+                "-req",
+                "-in",
+                csr_path,
+                "-CA",
+                str(ca_cert),
+                "-CAkey",
+                str(ca_key),
+                "-CAcreateserial",
+                "-out",
+                str(client_cert_path),
+                "-days",
+                "365",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        # Copy CA certificate for client use
+        client_ca_path = output_dir / f"{client_name}-ca.crt"
+        shutil.copy2(ca_cert, client_ca_path)
+
+        logger.info(f"Generated client certificate for: {client_name}")
+
+        return {
+            "cert": str(client_cert_path),
+            "key": str(client_key_path),
+            "ca": str(client_ca_path),
+        }
+
+    finally:
+        # Clean up CSR file
+        os.unlink(csr_path)
+
+
+def remove_tls_config() -> None:
+    """Remove TLS configuration and certificates."""
+    logger.info("Removing TLS configuration")
+
+    # Remove certificate directory
+    if MOSQUITTO_CERTS_DIR.exists():
+        shutil.rmtree(MOSQUITTO_CERTS_DIR)
+
+    # Recreate empty directory
+    MOSQUITTO_CERTS_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["chown", "-R", "mosquitto:mosquitto", str(MOSQUITTO_CERTS_DIR)],
+        check=True,
+        capture_output=True,
+    )
+
+
+def setup_password_auth(users: dict[str, str]) -> None:
+    """Set up password-based authentication."""
+    logger.info("Setting up password authentication")
+
+    password_file = MOSQUITTO_AUTH_DIR / "passwd"
+
+    # Create password file
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as temp_file:
+        temp_path = temp_file.name
+
+    try:
+        # Generate password file
+        for username, password in users.items():
+            subprocess.run(
+                ["mosquitto_passwd", "-b", temp_path, username, password],
+                check=True,
+                capture_output=True,
+            )
+
+        # Move to final location
+        shutil.move(temp_path, password_file)
+
+        # Set permissions
+        subprocess.run(
+            ["chown", "mosquitto:mosquitto", str(password_file)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["chmod", "600", str(password_file)],
+            check=True,
+            capture_output=True,
+        )
+
+        logger.info(f"Password file created with {len(users)} users")
+
+    finally:
+        # Clean up temp file if it still exists
+        if pathlib.Path(temp_path).exists():
+            os.unlink(temp_path)
+
+
+def setup_acl(acl_rules: list[str]) -> None:
+    """Set up ACL-based authorization."""
+    logger.info("Setting up ACL authorization")
+
+    acl_file = MOSQUITTO_AUTH_DIR / "acl"
+
+    # Write ACL rules
+    acl_content = "\n".join(acl_rules) + "\n"
+    acl_file.write_text(acl_content)
+
+    # Set permissions
+    subprocess.run(
+        ["chown", "mosquitto:mosquitto", str(acl_file)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["chmod", "644", str(acl_file)],
+        check=True,
+        capture_output=True,
+    )
+
+    logger.info(f"ACL file created with {len(acl_rules)} rules")
