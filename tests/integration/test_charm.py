@@ -33,6 +33,9 @@ class TestMosquittoCharmIntegration:
 
     def _deploy_and_wait(self, juju, charm_file):
         """Helper method to deploy charm and wait for it to be active."""
+        # Ensure local charm path starts with ./ for juju
+        if not charm_file.startswith('./'):
+            charm_file = f"./{charm_file}"
         juju.deploy(charm_file, app=APP_NAME)
         juju.wait_for_idle([APP_NAME], status="active", timeout=600)
 
