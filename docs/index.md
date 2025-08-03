@@ -42,6 +42,13 @@ In-depth discussion of key topics and concepts:
 - **[Charm Design](explanation/charm-design.md)** - Design decisions and patterns
 - **[Performance Characteristics](explanation/performance.md)** - Understanding performance factors
 
+### 📊 Visual Diagrams
+
+Comprehensive architectural diagrams and visual guides:
+
+- **[Charm Architecture](diagrams/charm-architecture.md)** - Visual overview of charm components and flows
+- **[Deployment Patterns](diagrams/deployment-patterns.md)** - Common deployment scenarios and scaling patterns
+
 *Perfect when you need to understand the why behind the charm's design and behavior.*
 
 ### 📖 Reference (Information-Oriented)
