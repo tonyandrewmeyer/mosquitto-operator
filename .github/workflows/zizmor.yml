@@ -1,0 +1,49 @@
+name: Zizmor Security Check
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/**'
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: '0 0 * * 0'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Run zizmor
+      uses: woodruffw/zizmor@v0
+      with:
+        config: |
+          rules:
+            artipacked:
+              level: medium
+            excessive-permissions:
+              level: medium
+            hardcoded-container-credentials:
+              level: high
+            impostor-commit:
+              level: medium
+            ref-confusion:
+              level: high
+            self-hosted-runner:
+              level: medium
+            template-injection:
+              level: high
+            use-trusted-publishing:
+              level: medium

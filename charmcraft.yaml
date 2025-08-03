@@ -1,0 +1,124 @@
+name: mosquitto
+type: charm
+summary: MQTT broker for IoT messaging
+description: |
+  Eclipse Mosquitto is an open-source MQTT broker that implements the MQTT protocol
+  versions 5.0, 3.1.1 and 3.1. It provides a lightweight method of carrying out
+  messaging using a publish/subscribe model, making it suitable for Internet of
+  Things messaging such as with low power sensors or mobile devices.
+
+base: ubuntu@22.04
+
+parts:
+  charm:
+    build-packages:
+      - python3-dev
+    charm-python-packages:
+      - ops
+      - requests
+
+config:
+  options:
+    port:
+      type: int
+      default: 1883
+      description: MQTT broker port
+    websockets-port:
+      type: int
+      default: 9001
+      description: WebSocket port for MQTT over WS
+    log-level:
+      type: string
+      default: warning
+      description: Logging verbosity (debug, info, warning, error)
+    persistence:
+      type: boolean
+      default: true
+      description: Enable message persistence
+    persistence-location:
+      type: string
+      default: /var/lib/mosquitto
+      description: Path for persistence data
+    max-connections:
+      type: int
+      default: -1
+      description: Maximum concurrent connections (-1 for unlimited)
+    allow-anonymous:
+      type: boolean
+      default: false
+      description: Allow anonymous connections
+    keepalive:
+      type: int
+      default: 60
+      description: Keepalive interval in seconds
+    message-size-limit:
+      type: int
+      default: 268435456
+      description: Maximum message size in bytes
+
+storage:
+  data:
+    type: filesystem
+    description: Persistent storage for Mosquitto data and configuration
+    location: /var/lib/mosquitto
+
+actions:
+  get-stats:
+    description: Retrieve broker statistics and connection info
+  reload-config:
+    description: Reload configuration without service restart
+  add-user:
+    description: Add MQTT user with password
+    params:
+      username:
+        type: string
+        description: Username for the new user
+      password:
+        type: string
+        description: Password for the new user
+    required: [username, password]
+  remove-user:
+    description: Remove MQTT user
+    params:
+      username:
+        type: string
+        description: Username to remove
+    required: [username]
+  list-users:
+    description: List configured users
+  backup-data:
+    description: Backup persistence data and configuration
+  restore-data:
+    description: Restore from backup
+    params:
+      backup-path:
+        type: string
+        description: Path to backup file
+    required: [backup-path]
+
+provides:
+  mqtt:
+    interface: mqtt
+    description: MQTT broker endpoint for client applications
+
+requires:
+  certificates:
+    interface: tls-certificates
+    optional: true
+    description: TLS certificates for secure connections
+  logging:
+    interface: loki_push_api
+    optional: true
+    description: Centralized logging integration
+  prometheus-scrape:
+    interface: prometheus_scrape
+    optional: true
+    description: Metrics collection
+
+peers:
+  mosquitto-peers:
+    interface: mosquitto-cluster
+    optional: true
+
+assumes:
+  - juju

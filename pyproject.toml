@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mosquitto-charm"
+version = "0.1.0"
+description = "Juju charm for Eclipse Mosquitto MQTT broker"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Mosquitto Charm Developers"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators", 
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "ops>=2.0.0",
+    "requests>=2.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "coverage>=7.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+testing = [
+    "ops[testing]>=2.0.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "coverage>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501", # line too long (handled by line-length)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["charm", "mosquitto"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+pretty = true
+show_column_numbers = true
+show_error_codes = true
+show_error_context = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --tb=short"
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+]
