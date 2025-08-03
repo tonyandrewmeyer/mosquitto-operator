@@ -131,10 +131,11 @@ def _add_auth_config(config_lines: list[str], config: "MosquittoConfig") -> None
     """Add authentication configuration to config lines."""
     config_lines.append(f"allow_anonymous {str(config.allow_anonymous).lower()}")
 
-    if config.password_file_path:
+    # Only add auth files if they actually exist
+    if config.password_file_path and pathlib.Path(config.password_file_path).exists():
         config_lines.append(f"password_file {config.password_file_path}")
 
-    if config.acl_file_path:
+    if config.acl_file_path and pathlib.Path(config.acl_file_path).exists():
         config_lines.append(f"acl_file {config.acl_file_path}")
 
 
