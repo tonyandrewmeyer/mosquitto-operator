@@ -17,6 +17,8 @@ import time
 from typing import TYPE_CHECKING
 
 import opentelemetry.trace
+from charms.operator_libs_linux.v0 import apt
+from charms.operator_libs_linux.v1 import systemd
 
 if TYPE_CHECKING:
     from charm import MosquittoConfig
@@ -39,14 +41,10 @@ def install() -> None:
         logger.info("Installing Mosquitto MQTT broker")
         span.add_event("Starting package installation")
 
-        subprocess.run(["apt", "update"], check=True, capture_output=True)
+        apt.update()
         span.add_event("APT update completed")
 
-        subprocess.run(
-            ["apt", "install", "-y", "mosquitto", "mosquitto-clients"],
-            check=True,
-            capture_output=True,
-        )
+        apt.add_package(["mosquitto", "mosquitto-clients"])
         span.add_event("Mosquitto packages installed")
 
     # Ensure directories exist
@@ -186,9 +184,8 @@ def _add_tls_config(config_lines: list[str], config: "MosquittoConfig") -> None:
 def start() -> None:
     """Start Mosquitto service."""
     logger.info("Starting Mosquitto service")
-    subprocess.run(["systemctl", "enable", "mosquitto"], check=True, capture_output=True)
-
-    subprocess.run(["systemctl", "start", "mosquitto"], check=True, capture_output=True)
+    systemd.service_enable("mosquitto")
+    systemd.service_start("mosquitto")
 
     # Wait for service to be ready
     _wait_for_service()
@@ -197,13 +194,13 @@ def start() -> None:
 def stop() -> None:
     """Stop Mosquitto service."""
     logger.info("Stopping Mosquitto service")
-    subprocess.run(["systemctl", "stop", "mosquitto"], check=True, capture_output=True)
+    systemd.service_stop("mosquitto")
 
 
 def restart() -> None:
     """Restart Mosquitto service."""
     logger.info("Restarting Mosquitto service")
-    subprocess.run(["systemctl", "restart", "mosquitto"], check=True, capture_output=True)
+    systemd.service_restart("mosquitto")
 
     # Wait for service to be ready
     _wait_for_service()
@@ -213,12 +210,9 @@ def _wait_for_service() -> None:
     """Wait for Mosquitto service to be ready."""
     for _ in range(30):  # Wait up to 30 seconds
         try:
-            result = subprocess.run(
-                ["systemctl", "is-active", "mosquitto"], capture_output=True, text=True
-            )
-            if result.returncode == 0 and result.stdout.strip() == "active":
+            if systemd.service_running("mosquitto"):
                 return
-        except subprocess.SubprocessError:
+        except Exception:
             pass
         time.sleep(1)
 
@@ -246,36 +240,36 @@ def get_version() -> str | None:
 def get_status() -> dict[str, str]:
     """Get Mosquitto service status and statistics."""
     try:
-        # Check systemctl status
-        systemctl_result = subprocess.run(
-            ["systemctl", "is-active", "mosquitto"], capture_output=True, text=True
-        )
-
-        service_status = systemctl_result.stdout.strip()
-
-        # Get service details
-        status_result = subprocess.run(
-            ["systemctl", "status", "mosquitto", "--no-pager", "--lines=0"],
-            capture_output=True,
-            text=True,
-        )
+        # Check service status using systemd lib
+        is_running = systemd.service_running("mosquitto")
+        service_status = "active" if is_running else "inactive"
 
         status_info = {
             "service-status": service_status,
             "version": get_version() or "unknown",
         }
 
-        # Extract additional info from status output
-        for line in status_result.stdout.split("\n"):
-            line = line.strip()
-            if "Active:" in line:
-                status_info["active-since"] = line.split("Active:")[1].strip()
-            elif "Main PID:" in line:
-                status_info["main-pid"] = line.split("Main PID:")[1].strip()
+        # Get additional service details if needed
+        try:
+            status_result = subprocess.run(
+                ["systemctl", "status", "mosquitto", "--no-pager", "--lines=0"],
+                capture_output=True,
+                text=True,
+            )
+
+            # Extract additional info from status output
+            for line in status_result.stdout.split("\n"):
+                line = line.strip()
+                if "Active:" in line:
+                    status_info["active-since"] = line.split("Active:")[1].strip()
+                elif "Main PID:" in line:
+                    status_info["main-pid"] = line.split("Main PID:")[1].strip()
+        except subprocess.SubprocessError:
+            pass  # Additional details are optional
 
         return status_info
 
-    except subprocess.SubprocessError:
+    except Exception:
         logger.exception("Failed to get Mosquitto status")
         return {"service-status": "unknown", "error": "Failed to get status"}
 
@@ -604,6 +598,7 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
 
         # Service status metric
         try:
+            # Note: This runs inside the metrics script, so we use subprocess for systemctl
             result = subprocess.run(
                 ["systemctl", "is-active", "mosquitto"],
                 capture_output=True, text=True
@@ -673,9 +668,9 @@ WantedBy=multi-user.target
     service_path.write_text(service_content)
 
     # Start the service
-    subprocess.run(["systemctl", "daemon-reload"], check=True, capture_output=True)
-    subprocess.run(["systemctl", "enable", "mosquitto-metrics"], check=True, capture_output=True)
-    subprocess.run(["systemctl", "start", "mosquitto-metrics"], check=True, capture_output=True)
+    systemd.daemon_reload()
+    systemd.service_enable("mosquitto-metrics")
+    systemd.service_start("mosquitto-metrics")
 
     logger.info(f"Prometheus metrics exporter started on port {metrics_port}")
 
@@ -686,8 +681,8 @@ def remove_prometheus_metrics() -> None:
 
     try:
         # Stop and disable metrics service
-        subprocess.run(["systemctl", "stop", "mosquitto-metrics"], capture_output=True)
-        subprocess.run(["systemctl", "disable", "mosquitto-metrics"], capture_output=True)
+        systemd.service_stop("mosquitto-metrics")
+        systemd.service_disable("mosquitto-metrics")
 
         # Remove service file
         service_path = pathlib.Path("/etc/systemd/system/mosquitto-metrics.service")
@@ -700,7 +695,7 @@ def remove_prometheus_metrics() -> None:
             metrics_script.unlink()
 
         # Reload systemd
-        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        systemd.daemon_reload()
 
         logger.info("Prometheus metrics configuration removed")
     except Exception as e:
@@ -710,11 +705,8 @@ def remove_prometheus_metrics() -> None:
 def get_metrics_status() -> dict[str, str]:
     """Get status of Prometheus metrics exporter."""
     try:
-        result = subprocess.run(
-            ["systemctl", "is-active", "mosquitto-metrics"], capture_output=True, text=True
-        )
-
-        status = result.stdout.strip()
+        is_running = systemd.service_running("mosquitto-metrics")
+        status = "active" if is_running else "inactive"
 
         # Get port information
         port_info = "unknown"

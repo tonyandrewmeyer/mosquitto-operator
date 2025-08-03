@@ -28,6 +28,13 @@ parts:
     plugin: charm
     source: .
 
+# Charm libraries
+charm-libs:
+  - lib: operator_libs_linux.apt
+    version: "0"
+  - lib: operator_libs_linux.systemd
+    version: "1"
+
 # (Optional) Configuration options for the charm
 # This config section defines charm config options, and populates the Configure
 # tab on Charmhub.
