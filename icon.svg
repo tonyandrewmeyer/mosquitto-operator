@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="50" cy="50" r="45" fill="#2C3E50" stroke="#34495E" stroke-width="2"/>
+  
+  <!-- Signal waves (MQTT messaging concept) -->
+  <g stroke="#3498DB" stroke-width="2" fill="none" opacity="0.8">
+    <!-- Outer wave -->
+    <path d="M 20 35 Q 30 25, 40 35 Q 50 45, 60 35 Q 70 25, 80 35" stroke-width="1.5"/>
+    <!-- Middle wave -->
+    <path d="M 25 42 Q 35 32, 45 42 Q 55 52, 65 42 Q 75 32, 80 42" stroke-width="1.5"/>
+    <!-- Inner wave -->
+    <path d="M 30 49 Q 40 39, 50 49 Q 60 59, 70 49" stroke-width="1.5"/>
+  </g>
+  
+  <!-- Stylized mosquito-inspired antenna/sensor -->
+  <g fill="#E67E22" stroke="#D35400" stroke-width="1">
+    <!-- Main body (vertical line representing antenna/sensor) -->
+    <rect x="48" y="55" width="4" height="25" rx="2"/>
+    
+    <!-- Sensor segments -->
+    <circle cx="50" cy="58" r="2"/>
+    <circle cx="50" cy="64" r="1.5"/>
+    <circle cx="50" cy="70" r="1.5"/>
+    <circle cx="50" cy="76" r="2"/>
+    
+    <!-- Wing-like transmission elements -->
+    <ellipse cx="42" cy="65" rx="6" ry="3" fill="#E67E22" opacity="0.7"/>
+    <ellipse cx="58" cy="65" rx="6" ry="3" fill="#E67E22" opacity="0.7"/>
+  </g>
+  
+  <!-- Central transmission hub -->
+  <circle cx="50" cy="50" r="6" fill="#E74C3C" stroke="#C0392B" stroke-width="2"/>
+  <circle cx="50" cy="50" r="3" fill="#F39C12"/>
+  
+  <!-- Connection points (representing MQTT pub/sub endpoints) -->
+  <g fill="#27AE60" stroke="#229954" stroke-width="1">
+    <!-- Left connection -->
+    <circle cx="25" cy="50" r="3"/>
+    <line x1="28" y1="50" x2="44" y2="50" stroke="#27AE60" stroke-width="2"/>
+    
+    <!-- Right connection -->
+    <circle cx="75" cy="50" r="3"/>
+    <line x1="72" y1="50" x2="56" y2="50" stroke="#27AE60" stroke-width="2"/>
+    
+    <!-- Top connection -->
+    <circle cx="50" cy="25" r="3"/>
+    <line x1="50" y1="28" x2="50" y2="44" stroke="#27AE60" stroke-width="2"/>
+  </g>
+  
+  <!-- Small data packet indicators -->
+  <g fill="#F1C40F" opacity="0.9">
+    <rect x="35" y="48" width="3" height="3" rx="1"/>
+    <rect x="62" y="48" width="3" height="3" rx="1"/>
+    <rect x="48" y="35" width="3" height="3" rx="1"/>
+  </g>
+</svg>
