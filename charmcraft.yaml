@@ -9,11 +9,19 @@ description: |
   method of carrying out messaging using a publish/subscribe model.
 
   This charm deploys and configures Mosquitto to provide reliable MQTT messaging
-  services with support for authentication, TLS encryption, and persistence.
+  services with support for TLS encryption, client authentication, storage integration,
+  monitoring, and comprehensive enterprise features.
 
-  Mosquitto is ideal for Internet of Things (IoT) applications, mobile messaging,
-  and scenarios requiring lightweight publish/subscribe messaging between devices
-  and applications.
+  Mosquitto is ideal for Internet of Things (IoT) applications, real-time web messaging,
+  microservices communication, and scenarios requiring reliable publish/subscribe
+  messaging between devices and applications.
+
+links:
+  documentation: https://charmhub.io/mosquitto/docs
+  website: https://mosquitto.org/
+  source: https://github.com/canonical/mosquitto-operator
+  issues: https://github.com/canonical/mosquitto-operator/issues
+  contact: https://discourse.charmhub.io/
 
 # Documentation:
 # https://canonical-charmcraft.readthedocs-hosted.com/en/stable/howto/build-guides/select-platforms/
