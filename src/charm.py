@@ -398,7 +398,7 @@ class MosquittoOperatorCharm(ops.CharmBase):
             for relation in self.model.relations["metrics"]:
                 relation.data[self.unit]["port"] = "9090"
                 relation.data[self.unit]["path"] = "/metrics"
-                relation.data[self.unit]["job"] = f"{self.model.app.name}-mosquitto"
+                relation.data[self.unit]["job"] = f"{self.model.app.name}"
 
 
 if __name__ == "__main__":  # pragma: nocover

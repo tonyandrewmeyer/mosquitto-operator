@@ -1,7 +1,7 @@
 # This file configures Charmcraft.
 # See https://canonical-charmcraft.readthedocs-hosted.com/en/stable/reference/files/charmcraft-yaml-file/
 type: charm
-name: mosquitto-operator
+name: mosquitto
 title: Mosquitto MQTT Broker
 summary: Eclipse Mosquitto MQTT message broker for IoT and messaging applications.
 description: |
