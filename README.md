@@ -1,23 +1,23 @@
 # Mosquitto MQTT Broker Charm
 
-[![Charmhub](https://img.shields.io/badge/charmhub-mosquitto--operator-blue.svg)](https://charmhub.io/mosquitto-operator)
+[![Charmhub](https://img.shields.io/badge/charmhub-mosquitto-blue.svg)](https://charmhub.io/mosquitto)
 [![License](https://img.shields.io/github/license/canonical/mosquitto-operator)](https://github.com/canonical/mosquitto-operator/blob/main/LICENSE)
-[![Tests](https://img.shields.io/badge/tests-19%20passed-green.svg)](./tests/)
+[![Tests](https://img.shields.io/badge/tests-passing-green.svg)](./tests/)
 [![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen.svg)](./tests/)
 
 A [Juju](https://juju.is) charm for deploying and managing [Eclipse Mosquitto](https://mosquitto.org/), the open-source MQTT message broker.
 
-Eclipse Mosquitto is a lightweight MQTT broker that implements the MQTT protocol versions 5.0, 3.1.1, and 3.1. This charm provides automated deployment, configuration, and lifecycle management for Mosquitto in production environments.
+Eclipse Mosquitto is a lightweight MQTT broker that implements the MQTT protocol versions 5.0, 3.1.1, and 3.1. This charm provides automated deployment, configuration, and lifecycle management for Mosquitto in production environments with enterprise features.
 
 ## Features
 
 - **Complete MQTT Support**: Full MQTT 5.0, 3.1.1, and 3.1 protocol implementation
-- **WebSocket Support**: MQTT over WebSockets for web applications
-- **Configurable Security**: Anonymous access control, authentication ready
-- **Message Persistence**: Reliable message storage and delivery
-- **Production Ready**: Systemd integration, logging, and monitoring
-- **Actions**: Service restart and status checking
-- **High Observability**: Comprehensive logging and status reporting
+- **WebSocket Support**: MQTT over WebSockets for web applications (plain and TLS)
+- **Enterprise Security**: TLS/SSL encryption, client certificate authentication, ACL authorization
+- **High Availability**: Message persistence with Juju storage integration
+- **Backup & Recovery**: Automated backup and restore capabilities
+- **Observability**: Prometheus metrics, OpenTelemetry tracing, comprehensive logging
+- **Production Ready**: Systemd integration, security hardening, monitoring
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ Eclipse Mosquitto is a lightweight MQTT broker that implements the MQTT protocol
 Deploy the Mosquitto charm with default settings:
 
 ```bash
-juju deploy mosquitto-operator
+juju deploy mosquitto
 ```
 
 Wait for the deployment to complete:
@@ -48,115 +48,194 @@ Once deployed, test the MQTT broker:
 
 ```bash
 # Subscribe to a topic (run in one terminal)
-juju ssh mosquitto-operator/0 'mosquitto_sub -h localhost -p 1883 -t test/topic'
+juju ssh mosquitto/0 'mosquitto_sub -h localhost -p 1883 -t test/topic'
 
 # Publish a message (run in another terminal)
-juju ssh mosquitto-operator/0 'mosquitto_pub -h localhost -p 1883 -t test/topic -m "Hello MQTT!"'
+juju ssh mosquitto/0 'mosquitto_pub -h localhost -p 1883 -t test/topic -m "Hello MQTT!"'
 ```
 
 ## Configuration
 
-The charm provides several configuration options to customize Mosquitto behavior:
+The charm provides comprehensive configuration options:
 
-### MQTT Settings
+### Basic MQTT Settings
 
 ```bash
 # Change MQTT port (default: 1883)
-juju config mosquitto-operator port=1884
+juju config mosquitto port=1884
 
 # Configure WebSocket port (default: 9001, set to 0 to disable)
-juju config mosquitto-operator websockets-port=9001
+juju config mosquitto websockets-port=9001
 
 # Set maximum concurrent connections (default: unlimited)
-juju config mosquitto-operator max-connections=1000
+juju config mosquitto max-connections=1000
+```
+
+### TLS/SSL Configuration
+
+```bash
+# Configure TLS ports
+juju config mosquitto tls-port=8883
+juju config mosquitto tls-websockets-port=9002
 ```
 
 ### Security Settings
 
 ```bash
-# Allow anonymous connections (default: false, not recommended for production)
-juju config mosquitto-operator allow-anonymous=true
+# Allow anonymous connections (default: false)
+juju config mosquitto allow-anonymous=false
 
 # Set logging level (default: notice)
-juju config mosquitto-operator log-level=debug
+juju config mosquitto log-level=debug
 ```
 
 ### Performance Settings
 
 ```bash
 # Enable/disable message persistence (default: true)
-juju config mosquitto-operator persistence=true
+juju config mosquitto persistence=true
 
 # Set maximum message size in bytes (default: 256MB)
-juju config mosquitto-operator message-size-limit=134217728
+juju config mosquitto message-size-limit=134217728
 ```
 
 ### Configuration Options Reference
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `port` | int | 1883 | MQTT broker port |
+| `port` | int | 1883 | Standard MQTT broker port |
 | `websockets-port` | int | 9001 | WebSocket port (0 to disable) |
+| `tls-port` | int | 8883 | TLS-encrypted MQTT port (0 to disable) |
+| `tls-websockets-port` | int | 9002 | TLS WebSocket port (0 to disable) |
 | `max-connections` | int | -1 | Max concurrent connections (-1 = unlimited) |
 | `allow-anonymous` | boolean | false | Allow anonymous client connections |
 | `log-level` | string | "notice" | Logging level (error/warning/notice/information/debug) |
 | `persistence` | boolean | true | Enable message persistence |
 | `message-size-limit` | int | 268435456 | Maximum message size in bytes |
 
+## Relations
+
+### TLS Certificates
+
+Connect to a certificate authority for automatic TLS certificate management:
+
+```bash
+juju deploy self-signed-certificates
+juju integrate mosquitto:certificates self-signed-certificates:certificates
+```
+
+### SASL Authentication
+
+Integrate with SASL for advanced authentication:
+
+```bash
+juju deploy sasl
+juju integrate mosquitto:sasl sasl:sasl
+```
+
+### Prometheus Monitoring
+
+Connect to Prometheus for metrics collection:
+
+```bash
+juju deploy prometheus
+juju integrate mosquitto:metrics prometheus:prometheus-scrape
+```
+
+### OpenTelemetry Tracing
+
+Enable distributed tracing:
+
+```bash
+juju deploy jaeger
+juju integrate mosquitto:charm-tracing jaeger:tracing
+```
+
 ## Actions
 
-The charm provides actions for operational tasks:
+The charm provides comprehensive operational actions:
 
-### Restart Service
-
-```bash
-juju run mosquitto-operator/0 restart
-```
-
-### Get Status Information
+### Service Management
 
 ```bash
-juju run mosquitto-operator/0 get-status
+# Restart the Mosquitto service
+juju run mosquitto/0 restart
+
+# Get detailed status information
+juju run mosquitto/0 get-status
 ```
 
-This returns detailed information including:
-- Service status
-- Version information  
-- Process details
-- Active since timestamp
+### Backup and Recovery
+
+```bash
+# Create a backup
+juju run mosquitto/0 backup
+
+# Create a named backup
+juju run mosquitto/0 backup backup-name=before-upgrade
+
+# Restore from backup
+juju run mosquitto/0 restore backup-name=before-upgrade
+```
+
+### Certificate Management
+
+```bash
+# Generate client certificates (when TLS is configured)
+juju run mosquitto/0 generate-client-cert client-name=myapp output-path=/tmp
+
+# Get metrics status
+juju run mosquitto/0 get-metrics-status
+```
+
+## Storage
+
+The charm supports Juju storage for persistent data:
+
+```bash
+# Deploy with custom storage
+juju deploy mosquitto --storage persistence=ebs,10G
+
+# Add storage to existing deployment
+juju add-storage mosquitto/0 persistence=10G
+```
 
 ## Use Cases
 
 ### IoT Applications
 
-Mosquitto is ideal for Internet of Things (IoT) deployments:
+Deploy Mosquitto for IoT with optimized settings:
 
 ```bash
-# Deploy for IoT with optimized settings
-juju deploy mosquitto-operator
-juju config mosquitto-operator max-connections=10000
-juju config mosquitto-operator message-size-limit=1048576  # 1MB limit
+juju deploy mosquitto
+juju config mosquitto max-connections=10000
+juju config mosquitto message-size-limit=1048576  # 1MB limit for IoT devices
 ```
 
-### Web Applications
+### Enterprise Deployment
 
-For web applications using MQTT over WebSockets:
+Secure enterprise deployment with TLS and monitoring:
 
 ```bash
-# Ensure WebSocket support is enabled
-juju config mosquitto-operator websockets-port=9001
-```
+juju deploy mosquitto
+juju deploy self-signed-certificates
+juju deploy prometheus
 
-Access MQTT from web applications using the WebSocket endpoint on port 9001.
+juju integrate mosquitto:certificates self-signed-certificates:certificates
+juju integrate mosquitto:metrics prometheus:prometheus-scrape
+
+juju config mosquitto allow-anonymous=false
+juju config mosquitto tls-port=8883
+```
 
 ### Development Environment
 
-For development with relaxed security:
+Development setup with debugging enabled:
 
 ```bash
-# Development setup (NOT for production)
-juju config mosquitto-operator allow-anonymous=true
-juju config mosquitto-operator log-level=debug
+juju deploy mosquitto
+juju config mosquitto allow-anonymous=true
+juju config mosquitto log-level=debug
 ```
 
 ## Monitoring and Observability
@@ -167,26 +246,48 @@ View Mosquitto logs:
 
 ```bash
 # View service logs
-juju ssh mosquitto-operator/0 'journalctl -u mosquitto -f'
+juju ssh mosquitto/0 'journalctl -u mosquitto -f'
 
 # View application logs
-juju ssh mosquitto-operator/0 'tail -f /var/log/mosquitto/mosquitto.log'
+juju ssh mosquitto/0 'tail -f /var/log/mosquitto/mosquitto.log'
 ```
 
-### Status Monitoring
+### Metrics
 
-Monitor charm and service status:
+When connected to Prometheus, the charm provides:
 
-```bash
-# Check charm status
-juju status mosquitto-operator
+- Service health metrics
+- Connection count metrics
+- Custom MQTT broker metrics
 
-# Get detailed status
-juju run mosquitto-operator/0 get-status
+### Tracing
 
-# Check service health
-juju ssh mosquitto-operator/0 'systemctl status mosquitto'
-```
+OpenTelemetry tracing provides visibility into:
+
+- Service startup and configuration changes
+- Backup and restore operations
+- Certificate generation
+- Relation lifecycle events
+
+## Security
+
+### Security Features
+
+- **TLS/SSL Encryption**: Automatic certificate management via relations
+- **Client Authentication**: X.509 client certificate support
+- **Access Control**: ACL-based authorization system
+- **Network Isolation**: Juju network spaces support
+- **Audit Logging**: Comprehensive security event logging
+
+### Security Best Practices
+
+- Always disable anonymous access in production
+- Use TLS encryption for all connections
+- Implement proper ACL rules for topic access
+- Monitor connection logs for suspicious activity
+- Regularly rotate certificates
+
+For security vulnerability reporting, see [SECURITY.md](SECURITY.md).
 
 ## Development
 
@@ -206,7 +307,9 @@ The charm includes comprehensive tests:
 
 ```bash
 # Install dependencies
-sudo apt install tox
+python -m venv .venv
+source .venv/bin/activate
+pip install tox
 
 # Run all tests
 tox
@@ -234,45 +337,23 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 ### Development Setup
 
 1. Clone the repository
-2. Install development dependencies: `sudo apt install tox python3-dev`
+2. Install development dependencies: `pip install tox`
 3. Run tests: `tox`
 4. Submit pull requests with tests and documentation
 
-### Testing Guidelines
+## Documentation
 
-- Unit tests are required for all new functionality
-- Integration tests should cover end-to-end scenarios
-- All tests must pass before merging
-- Maintain or improve code coverage
-
-## Security
-
-Please see [SECURITY.md](SECURITY.md) for information about reporting security vulnerabilities.
-
-### Security Considerations
-
-- **Anonymous Access**: Disabled by default for security
-- **Network Security**: Use Juju network spaces to control access
-- **Authentication**: Plan to add TLS and authentication support
-- **Logging**: Sensitive information is not logged
-
-## Architecture
-
-This is a **machine charm** that:
-
-- Installs Mosquitto via APT packages
-- Manages configuration files in `/etc/mosquitto/`
-- Uses systemd for service lifecycle management
-- Stores persistent data in `/var/lib/mosquitto/`
-- Logs to `/var/log/mosquitto/`
+- **Tutorial**: [Getting Started Guide](docs/tutorial.md)
+- **How-to Guides**: [Feature-specific guides](docs/how-to/)
+- **Reference**: [API and configuration reference](docs/reference/)
+- **Explanation**: [Architecture and design](docs/explanation/)
 
 ## Resources
 
-- **Charm Documentation**: [Tutorial](TUTORIAL.md) | [Contributing](CONTRIBUTING.md)
 - **Mosquitto Documentation**: [mosquitto.org](https://mosquitto.org/documentation/)
 - **MQTT Protocol**: [MQTT 5.0 Specification](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html)
 - **Juju Documentation**: [juju.is/docs](https://juju.is/docs/)
-- **Charmhub**: [charmhub.io/mosquitto-operator](https://charmhub.io/mosquitto-operator)
+- **Charmhub**: [charmhub.io/mosquitto](https://charmhub.io/mosquitto)
 
 ## License
 
