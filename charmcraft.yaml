@@ -147,3 +147,5 @@ actions:
         default: "/tmp"
     required:
       - client-name
+  get-metrics-status:
+    description: Get status of Prometheus metrics exporter

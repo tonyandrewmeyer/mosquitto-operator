@@ -543,3 +543,173 @@ def setup_acl(acl_rules: list[str]) -> None:
     )
 
     logger.info(f"ACL file created with {len(acl_rules)} rules")
+
+
+def setup_prometheus_metrics(metrics_port: int = 9090) -> None:
+    """Set up Prometheus metrics collection for Mosquitto."""
+    logger.info(f"Setting up Prometheus metrics on port {metrics_port}")
+
+    # Create simple metrics exporter script
+    metrics_script = pathlib.Path("/usr/local/bin/mosquitto-metrics-exporter")
+
+    # Simple metrics script content
+    script_content = '''#!/usr/bin/env python3
+"""Simple Mosquitto metrics exporter for Prometheus."""
+
+import http.server
+import socketserver
+import subprocess
+
+
+class MetricsHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/metrics":
+            metrics = self.collect_metrics()
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(metrics.encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def collect_metrics(self) -> str:
+        """Collect Mosquitto metrics and format for Prometheus."""
+        metrics = []
+        
+        # Service status metric
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", "mosquitto"],
+                capture_output=True, text=True
+            )
+            service_up = 1 if result.returncode == 0 else 0
+            metrics.append(f"mosquitto_service_up {service_up}")
+        except Exception:
+            metrics.append("mosquitto_service_up 0")
+        
+        # Connection count
+        try:
+            result = subprocess.run(
+                ["ss", "-tn", "sport", "=", ":1883"],
+                capture_output=True, text=True
+            )
+            count = len([line for line in result.stdout.split("\\n") if ":1883" in line]) - 1
+            connection_count = max(0, count)
+            metrics.append(f"mosquitto_connections_current {connection_count}")
+        except Exception:
+            metrics.append("mosquitto_connections_current 0")
+        
+        # Format as Prometheus metrics
+        output = []
+        output.append("# HELP mosquitto_service_up Whether Mosquitto service is running")
+        output.append("# TYPE mosquitto_service_up gauge")
+        output.append("# HELP mosquitto_connections_current Current client connections")
+        output.append("# TYPE mosquitto_connections_current gauge")
+        output.extend(metrics)
+        output.append("")
+        
+        return "\\n".join(output)
+
+
+if __name__ == "__main__":
+    PORT = METRICS_PORT_PLACEHOLDER
+    with socketserver.TCPServer(("", PORT), MetricsHandler) as httpd:
+        print(f"Serving Mosquitto metrics at port {PORT}")
+        httpd.serve_forever()
+'''
+
+    # Replace placeholder with actual port
+    final_content = script_content.replace("METRICS_PORT_PLACEHOLDER", str(metrics_port))
+
+    # Write the script
+    metrics_script.write_text(final_content)
+    metrics_script.chmod(0o755)
+
+    # Create systemd service
+    service_content = """[Unit]
+Description=Mosquitto Prometheus Metrics Exporter
+After=mosquitto.service
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+User=mosquitto
+Group=mosquitto
+ExecStart=/usr/local/bin/mosquitto-metrics-exporter
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    service_path = pathlib.Path("/etc/systemd/system/mosquitto-metrics.service")
+    service_path.write_text(service_content)
+
+    # Start the service
+    subprocess.run(["systemctl", "daemon-reload"], check=True, capture_output=True)
+    subprocess.run(["systemctl", "enable", "mosquitto-metrics"], check=True, capture_output=True)
+    subprocess.run(["systemctl", "start", "mosquitto-metrics"], check=True, capture_output=True)
+
+    logger.info(f"Prometheus metrics exporter started on port {metrics_port}")
+
+
+def remove_prometheus_metrics() -> None:
+    """Remove Prometheus metrics configuration."""
+    logger.info("Removing Prometheus metrics configuration")
+
+    try:
+        # Stop and disable metrics service
+        subprocess.run(["systemctl", "stop", "mosquitto-metrics"], capture_output=True)
+        subprocess.run(["systemctl", "disable", "mosquitto-metrics"], capture_output=True)
+
+        # Remove service file
+        service_path = pathlib.Path("/etc/systemd/system/mosquitto-metrics.service")
+        if service_path.exists():
+            service_path.unlink()
+
+        # Remove metrics script
+        metrics_script = pathlib.Path("/usr/local/bin/mosquitto-metrics-exporter")
+        if metrics_script.exists():
+            metrics_script.unlink()
+
+        # Reload systemd
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+
+        logger.info("Prometheus metrics configuration removed")
+    except Exception as e:
+        logger.warning(f"Error removing metrics configuration: {e}")
+
+
+def get_metrics_status() -> dict[str, str]:
+    """Get status of Prometheus metrics exporter."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "mosquitto-metrics"], capture_output=True, text=True
+        )
+
+        status = result.stdout.strip()
+
+        # Get port information
+        port_info = "unknown"
+        try:
+            port_result = subprocess.run(
+                ["ss", "-tlnp", "|", "grep", ":9090"], shell=True, capture_output=True, text=True
+            )
+            if port_result.returncode == 0 and port_result.stdout:
+                port_info = "9090"
+        except Exception:
+            pass
+
+        return {
+            "metrics-service-status": status,
+            "metrics-port": port_info,
+            "metrics-endpoint": f"http://localhost:{port_info}/metrics"
+            if port_info != "unknown"
+            else "unavailable",
+        }
+
+    except subprocess.SubprocessError:
+        logger.exception("Failed to get metrics status")
+        return {"metrics-service-status": "unknown", "error": "Failed to get metrics status"}

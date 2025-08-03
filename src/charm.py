@@ -73,6 +73,13 @@ class GenerateClientCertAction:
     output_path: str = "/tmp"
 
 
+@dataclass
+class GetMetricsStatusAction:
+    """Action to get metrics status."""
+
+    pass
+
+
 class MosquittoOperatorCharm(ops.CharmBase):
     """Charm the application."""
 
@@ -89,6 +96,7 @@ class MosquittoOperatorCharm(ops.CharmBase):
         framework.observe(
             self.on.generate_client_cert_action, self._on_generate_client_cert_action
         )
+        framework.observe(self.on.get_metrics_status_action, self._on_get_metrics_status_action)
 
         # Relation events
         framework.observe(
@@ -103,6 +111,7 @@ class MosquittoOperatorCharm(ops.CharmBase):
         framework.observe(self.on.sasl_relation_joined, self._on_sasl_relation_joined)
         framework.observe(self.on.sasl_relation_changed, self._on_sasl_relation_changed)
         framework.observe(self.on.metrics_relation_joined, self._on_metrics_relation_joined)
+        framework.observe(self.on.metrics_relation_departed, self._on_metrics_relation_departed)
 
     def _get_mosquitto_config(self) -> MosquittoConfig:
         """Get Mosquitto configuration from charm config."""
@@ -216,6 +225,14 @@ class MosquittoOperatorCharm(ops.CharmBase):
         except Exception as e:
             event.fail(f"Certificate generation failed: {e}")
 
+    def _on_get_metrics_status_action(self, event: ops.ActionEvent):
+        """Handle get-metrics-status action."""
+        try:
+            status = mosquitto.get_metrics_status()
+            event.set_results(status)
+        except Exception as e:
+            event.fail(f"Failed to get metrics status: {e}")
+
     # Relation event handlers
     def _on_certificates_relation_joined(self, event: ops.RelationJoinedEvent):
         """Handle certificates relation joined."""
@@ -256,6 +273,13 @@ class MosquittoOperatorCharm(ops.CharmBase):
         # Configure Prometheus metrics endpoint
         self._configure_metrics_endpoint()
 
+    def _on_metrics_relation_departed(self, event: ops.RelationDepartedEvent):
+        """Handle metrics relation departed."""
+        logger.info("Metrics relation departed")
+        # Remove metrics configuration if no more metrics relations
+        if not self.model.relations.get("metrics"):
+            mosquitto.remove_prometheus_metrics()
+
     # Helper methods for relation handling
     def _request_certificates(self):
         """Request TLS certificates from certificate authority."""
@@ -281,8 +305,17 @@ class MosquittoOperatorCharm(ops.CharmBase):
 
     def _configure_metrics_endpoint(self):
         """Configure Prometheus metrics endpoint."""
-        # Implementation will be added with metrics support
-        pass
+        logger.info("Configuring Prometheus metrics endpoint")
+
+        # Set up metrics exporter
+        mosquitto.setup_prometheus_metrics()
+
+        # Update relation data for Prometheus
+        if self.model.relations.get("metrics"):
+            for relation in self.model.relations["metrics"]:
+                relation.data[self.unit]["port"] = "9090"
+                relation.data[self.unit]["path"] = "/metrics"
+                relation.data[self.unit]["job"] = f"{self.model.app.name}-mosquitto"
 
 
 if __name__ == "__main__":  # pragma: nocover
