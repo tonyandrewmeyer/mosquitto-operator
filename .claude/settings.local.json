@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:mosquitto.org)",
+      "Bash(charmcraft init:*)",
+      "Bash(tox:*)",
+      "Bash(python:*)",
+      "Bash(ruff format:*)",
+      "Bash(apt:*)",
+      "Bash(apt install:*)",
+      "Bash(charmcraft pack:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(juju:*)",
+      "Bash(pip3 search:*)",
+      "Bash(uv pip install:*)",
+      "Bash(uv venv:*)",
+      "Bash(source:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "WebFetch(domain:canonical-charmcraft.readthedocs-hosted.com)",
+      "Bash(grep:*)",
+      "Bash(ruff check:*)",
+      "WebFetch(domain:documentation.ubuntu.com)",
+      "Bash(charmcraft fetch-libs:*)",
+      "Bash(PYTHONPATH=lib python -c \"from charms.operator_libs_linux.v0 import apt; from charms.operator_libs_linux.v1 import systemd; print(''Import successful'')\")",
+      "Bash(PYTHONPATH=lib python -c \"from charms.operator_libs_linux.v0 import apt; from charms.operator_libs_linux.v1 import systemd; print(''Import successful'')\")",
+      "Bash(PYTHONPATH=lib python -m py_compile src/mosquitto.py)",
+      "Bash(ls:*)"
+    ],
+    "deny": []
+  }
+}
