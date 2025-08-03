@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MosquittoConfig:
     """Configuration for Mosquitto MQTT broker."""
-    
+
     port: int
     websockets_port: int
     max_connections: int
@@ -31,12 +31,14 @@ class MosquittoConfig:
 @dataclass
 class RestartAction:
     """Action to restart Mosquitto service."""
+
     pass
 
 
 @dataclass
 class GetStatusAction:
     """Action to get Mosquitto status."""
+
     pass
 
 

@@ -19,7 +19,7 @@ Charms are built using Ops. Ops provides the charm with a way to communicate wit
 
 ## Quality Checks
 
-Charm code is always formatted, linted, and staticly type checked before commiting. Format the code using `tox -e format` and run the linting and type checking using `tox -e lint`. Under the hood, these use `ruff format`, `ruff check` and `pyright`.
+Charm code is always formatted, linted, and statically type checked before committing. Format the code using `tox -e format` and run the linting and type checking using `tox -e lint`. Under the hood, these use `ruff format`, `ruff check` and `pyright`.
 
 Charms always have a comprehensive set of automated tests. These tests are often run locally but also always run in a CI workflow for every PR and merge to main.
 

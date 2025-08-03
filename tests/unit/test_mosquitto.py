@@ -3,7 +3,6 @@
 
 """Unit tests for mosquitto module."""
 
-import pathlib
 import subprocess
 from unittest.mock import Mock, call
 
@@ -22,16 +21,28 @@ class TestMosquittoInstallation:
         mock_mkdir = Mock()
         monkeypatch.setattr("subprocess.run", mock_run)
         monkeypatch.setattr("pathlib.Path.mkdir", mock_mkdir)
-        
+
         mosquitto.install()
-        
+
         expected_calls = [
             call(["apt", "update"], check=True, capture_output=True),
-            call(["apt", "install", "-y", "mosquitto", "mosquitto-clients"], check=True, capture_output=True),
-            call(["chown", "-R", "mosquitto:mosquitto", str(mosquitto.MOSQUITTO_DATA_DIR)], check=True, capture_output=True),
-            call(["chown", "-R", "mosquitto:mosquitto", str(mosquitto.MOSQUITTO_LOG_DIR)], check=True, capture_output=True),
+            call(
+                ["apt", "install", "-y", "mosquitto", "mosquitto-clients"],
+                check=True,
+                capture_output=True,
+            ),
+            call(
+                ["chown", "-R", "mosquitto:mosquitto", str(mosquitto.MOSQUITTO_DATA_DIR)],
+                check=True,
+                capture_output=True,
+            ),
+            call(
+                ["chown", "-R", "mosquitto:mosquitto", str(mosquitto.MOSQUITTO_LOG_DIR)],
+                check=True,
+                capture_output=True,
+            ),
         ]
-        
+
         assert mock_run.call_args_list == expected_calls
 
 
@@ -44,7 +55,7 @@ class TestMosquittoConfiguration:
         mock_run = Mock()
         monkeypatch.setattr("pathlib.Path.write_text", mock_write_text)
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         config = MosquittoConfig(
             port=1883,
             websockets_port=9001,
@@ -54,13 +65,13 @@ class TestMosquittoConfiguration:
             persistence=True,
             message_size_limit=1024,
         )
-        
+
         mosquitto.configure(config)
-        
+
         # Verify config file was written
         mock_write_text.assert_called_once()
         written_config = mock_write_text.call_args[0][0]
-        
+
         assert "port 1883" in written_config
         assert "listener 9001" in written_config
         assert "protocol websockets" in written_config
@@ -76,7 +87,7 @@ class TestMosquittoConfiguration:
         mock_run = Mock()
         monkeypatch.setattr("pathlib.Path.write_text", mock_write_text)
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         config = MosquittoConfig(
             port=1883,
             websockets_port=0,  # Disabled
@@ -86,11 +97,11 @@ class TestMosquittoConfiguration:
             persistence=False,
             message_size_limit=0,
         )
-        
+
         mosquitto.configure(config)
-        
+
         written_config = mock_write_text.call_args[0][0]
-        
+
         assert "listener 9001" not in written_config
         assert "protocol websockets" not in written_config
         assert "allow_anonymous true" in written_config
@@ -108,14 +119,14 @@ class TestMosquittoServiceManagement:
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "active"
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         mosquitto.start()
-        
+
         expected_calls = [
             call(["systemctl", "enable", "mosquitto"], check=True, capture_output=True),
             call(["systemctl", "start", "mosquitto"], check=True, capture_output=True),
         ]
-        
+
         # Check that enable and start were called (ignoring service check calls)
         actual_calls = [call for call in mock_run.call_args_list if "is-active" not in call[0][0]]
         assert actual_calls == expected_calls
@@ -124,9 +135,9 @@ class TestMosquittoServiceManagement:
         """Test that stop function stops the service."""
         mock_run = Mock()
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         mosquitto.stop()
-        
+
         mock_run.assert_called_once_with(
             ["systemctl", "stop", "mosquitto"], check=True, capture_output=True
         )
@@ -137,13 +148,15 @@ class TestMosquittoServiceManagement:
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "active"
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         mosquitto.restart()
-        
+
         # Check that restart was called (ignoring service check calls)
         restart_calls = [call for call in mock_run.call_args_list if "restart" in call[0][0]]
         assert len(restart_calls) == 1
-        assert restart_calls[0] == call(["systemctl", "restart", "mosquitto"], check=True, capture_output=True)
+        assert restart_calls[0] == call(
+            ["systemctl", "restart", "mosquitto"], check=True, capture_output=True
+        )
 
 
 class TestMosquittoVersion:
@@ -154,9 +167,9 @@ class TestMosquittoVersion:
         mock_run = Mock()
         mock_run.return_value.stderr = "mosquitto version 2.0.15 running on Linux"
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         version = mosquitto.get_version()
-        
+
         assert version == "2.0.15"
         mock_run.assert_called_once_with(["mosquitto", "-h"], capture_output=True, text=True)
 
@@ -164,9 +177,9 @@ class TestMosquittoVersion:
         """Test that get_version returns None when command fails."""
         mock_run = Mock(side_effect=subprocess.SubprocessError())
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         version = mosquitto.get_version()
-        
+
         assert version is None
 
 
@@ -178,24 +191,27 @@ class TestMosquittoStatus:
         mock_run = Mock()
         mock_run.side_effect = [
             Mock(stdout="active", returncode=0),  # systemctl is-active
-            Mock(stdout="● mosquitto.service - LSB: mosquitto MQTT v3.1/v3.1.1 Broker\n"
-                       "   Loaded: loaded (/etc/init.d/mosquitto; generated)\n"
-                       "   Active: active (running) since Mon 2025-08-03 15:24:42 UTC; 5min ago\n"
-                       "     Docs: man:systemd-sysv-generator(8)\n"
-                       "  Process: 1234 ExecStart=/etc/init.d/mosquitto start (code=exited, status=0/SUCCESS)\n"
-                       "    Tasks: 1 (limit: 1234)\n"
-                       "   Memory: 1.2M\n"
-                       "   CGroup: /system.slice/mosquitto.service\n"
-                       "           └─1234 /usr/sbin/mosquitto -c /etc/mosquitto/mosquitto.conf\n"
-                       "Main PID: 1234 (mosquitto)")
+            Mock(
+                stdout="● mosquitto.service - LSB: mosquitto MQTT v3.1/v3.1.1 Broker\n"
+                "   Loaded: loaded (/etc/init.d/mosquitto; generated)\n"
+                "   Active: active (running) since Mon 2025-08-03 15:24:42 UTC; 5min ago\n"
+                "     Docs: man:systemd-sysv-generator(8)\n"
+                "  Process: 1234 ExecStart=/etc/init.d/mosquitto start (code=exited, "
+                "status=0/SUCCESS)\n"
+                "    Tasks: 1 (limit: 1234)\n"
+                "   Memory: 1.2M\n"
+                "   CGroup: /system.slice/mosquitto.service\n"
+                "           └─1234 /usr/sbin/mosquitto -c /etc/mosquitto/mosquitto.conf\n"
+                "Main PID: 1234 (mosquitto)"
+            ),
         ]
-        
+
         mock_get_version = Mock(return_value="2.0.15")
         monkeypatch.setattr("subprocess.run", mock_run)
         monkeypatch.setattr("mosquitto.get_version", mock_get_version)
-        
+
         status = mosquitto.get_status()
-        
+
         assert status["service-status"] == "active"
         assert status["version"] == "2.0.15"
         assert "active (running) since Mon 2025-08-03 15:24:42 UTC" in status["active-since"]
@@ -205,8 +221,8 @@ class TestMosquittoStatus:
         """Test that get_status handles subprocess errors gracefully."""
         mock_run = Mock(side_effect=subprocess.SubprocessError())
         monkeypatch.setattr("subprocess.run", mock_run)
-        
+
         status = mosquitto.get_status()
-        
+
         assert status["service-status"] == "unknown"
         assert "error" in status
