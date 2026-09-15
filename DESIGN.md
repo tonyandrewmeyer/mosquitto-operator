@@ -322,6 +322,19 @@ health-check, and roll back if the health check fails.
 **Status** via `collect_unit_status`, with `add_status()` called as many times as
 apply and ops picking the highest priority.
 
+**Ports** are declared to Juju with `unit.set_ports()` for each listener that is
+actually open, so that `juju expose` does something on a cloud that firewalls
+machines. The metrics port is left out: it exists for the observability subordinate
+on the same machine.
+
+Three things in this document were written from research and turned out to be wrong
+when the charm was run against a real broker; they are corrected in WORKLOAD.md and
+noted here so the two do not disagree. Systemd's `ProtectSystem` has to be `full`
+rather than `strict`, and `SystemCallFilter=~@privileged` cannot be used at all,
+because Mosquitto drops privileges with `setuid`. And although the bridge directives
+are reload-safe in Mosquitto, the charm restarts for them, because the classifier
+defaults anything not on its allow-list to a restart.
+
 **Addresses**: always `self.model.get_binding(...).network.bind_address` /
 `.ingress_address`. Never `private-address` from relation data — Juju 4.0 no longer
 maintains it.

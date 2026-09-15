@@ -131,9 +131,15 @@ class _AssignedCertificate:
 @pytest.fixture
 def certificates(monkeypatch: pytest.MonkeyPatch):
     """Make the certificate authority appear to have issued a certificate."""
+
+    def get_assigned_certificate(
+        self: object, request: object
+    ) -> tuple[_AssignedCertificate, str]:
+        return _AssignedCertificate(), PRIVATE_KEY
+
     monkeypatch.setattr(
         'charmlibs.interfaces.tls_certificates.TLSCertificatesRequiresV4.get_assigned_certificate',
-        lambda self, request: (_AssignedCertificate(), PRIVATE_KEY),
+        get_assigned_certificate,
     )
 
 
@@ -201,7 +207,7 @@ def test_the_fake_matches_the_real_signature(name: str, fake: conftest.FakeMosqu
 # --------------------------------------------------------------------------------------
 
 
-def test_install(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_install(ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto):
     state_out = ctx.run(ctx.on.install(), make_state())
 
     assert fake.installs == [('archive', 'latest/stable')]
@@ -214,7 +220,7 @@ def test_install(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
 
 
 def test_install_from_the_snap_uses_the_channel(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'install-source': 'snap', 'package-channel': '2.0/stable'})
 
@@ -224,7 +230,7 @@ def test_install_from_the_snap_uses_the_channel(
 
 
 def test_install_does_nothing_when_the_configuration_is_invalid(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """A traceback in the unit log is no use; the status says what to change."""
     state_in = make_state(config={'persistent-client-expiration': 'forever'})
@@ -237,7 +243,7 @@ def test_install_does_nothing_when_the_configuration_is_invalid(
 
 
 def test_start_configures_and_starts_the_broker(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_out = ctx.run(ctx.on.start(), make_state())
 
@@ -253,7 +259,7 @@ def test_start_configures_and_starts_the_broker(
 
 
 def test_start_installs_when_mosquitto_is_missing(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.version = None
 
@@ -263,7 +269,7 @@ def test_start_installs_when_mosquitto_is_missing(
 
 
 def test_stop_stops_the_broker_and_the_exporter(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.running = True
     fake.exporter.installed = True
@@ -276,7 +282,7 @@ def test_stop_stops_the_broker_and_the_exporter(
 
 
 def test_stop_tolerates_a_broker_that_will_not_stop(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """A unit that cannot be removed because the workload is wedged helps nobody."""
     fake.running = True
@@ -288,7 +294,7 @@ def test_stop_tolerates_a_broker_that_will_not_stop(
 
 
 def test_remove_uninstalls_and_drops_the_tuning(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     ctx.run(ctx.on.remove(), make_state())
 
@@ -297,7 +303,7 @@ def test_remove_uninstalls_and_drops_the_tuning(
 
 
 def test_remove_with_invalid_config_falls_back_to_the_archive_layout(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'persistent-client-expiration': 'forever'})
 
@@ -307,7 +313,7 @@ def test_remove_with_invalid_config_falls_back_to_the_archive_layout(
 
 
 def test_upgrade_reinstalls_and_reconciles(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     ctx.run(ctx.on.upgrade_charm(), make_state())
 
@@ -315,7 +321,9 @@ def test_upgrade_reinstalls_and_reconciles(
     assert fake.running
 
 
-def test_update_status_reconciles(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_update_status_reconciles(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     first = ctx.run(ctx.on.start(), make_state())
 
     ctx.run(ctx.on.update_status(), dataclasses.replace(first))
@@ -324,14 +332,16 @@ def test_update_status_reconciles(ctx: testing.Context[Any], fake: conftest.Fake
     assert fake.last_change is mosquitto.Change.NONE
 
 
-def test_config_changed_rerenders(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_config_changed_rerenders(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     ctx.run(ctx.on.config_changed(), make_state(config={'log-level': 'debug'}))
 
     assert ('log_type', 'debug') in directives(fake.main_config)
 
 
 def test_changing_the_install_source_migrates_the_state(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """The snap cannot see /etc/mosquitto, so the broker's state has to move."""
     state_in = make_state(
@@ -352,7 +362,7 @@ def test_changing_the_install_source_migrates_the_state(
 
 
 def test_a_second_unit_blocks_and_the_workload_is_not_touched(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """Two units would be two unrelated brokers sharing one application name.
 
@@ -369,7 +379,7 @@ def test_a_second_unit_blocks_and_the_workload_is_not_touched(
 
 @pytest.mark.parametrize('event', ['start', 'upgrade_charm', 'update_status'])
 def test_the_scale_guard_holds_for_every_reconciling_event(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, event: str
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, event: str
 ):
     state_in = make_state(peer=peer_relation(other_units=True))
 
@@ -385,7 +395,7 @@ def test_the_scale_guard_holds_for_every_reconciling_event(
 
 
 def test_status_when_the_configuration_is_invalid(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'port': 1883, 'tls-port': 1883})
 
@@ -398,7 +408,7 @@ def test_status_when_the_configuration_is_invalid(
 
 
 def test_status_names_the_offending_option(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'persistent-client-expiration': 'forever'})
 
@@ -412,7 +422,7 @@ def test_status_names_the_offending_option(
 
 
 def test_status_when_the_deployment_is_scaled(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(peer=peer_relation(other_units=True))
 
@@ -421,7 +431,9 @@ def test_status_when_the_deployment_is_scaled(
     assert state_out.unit_status == testing.BlockedStatus(SCALE_MESSAGE)
 
 
-def test_status_when_paused(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_status_when_paused(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_in = make_state(peer=peer_relation(paused=True))
 
     state_out = ctx.run(ctx.on.update_status(), state_in)
@@ -433,7 +445,7 @@ def test_status_when_paused(ctx: testing.Context[Any], fake: conftest.FakeMosqui
 
 
 def test_status_when_mosquitto_is_not_installed(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.version = None
     fake.installs_succeed = False
@@ -444,7 +456,7 @@ def test_status_when_mosquitto_is_not_installed(
 
 
 def test_status_when_the_broker_will_not_run(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.start_works = False
 
@@ -456,7 +468,7 @@ def test_status_when_the_broker_will_not_run(
 
 
 def test_a_broker_that_refuses_to_start_says_why(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """The operator should not have to go and find the journal themselves."""
     fake.start_error = 'could not start Mosquitto: Job for mosquitto.service failed'
@@ -473,7 +485,7 @@ def test_a_broker_that_refuses_to_start_says_why(
 
 
 def test_a_failed_reload_does_not_error_the_hook(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """A reload is asynchronous, so a rejected configuration surfaces here.
 
@@ -497,7 +509,7 @@ def test_a_failed_reload_does_not_error_the_hook(
 
 
 def test_status_warns_about_anonymous_access(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'allow-anonymous': True})
 
@@ -509,7 +521,7 @@ def test_status_warns_about_anonymous_access(
 
 
 def test_status_warns_about_a_bridge_that_carries_nothing(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     upstream = testing.Relation('upstream', remote_app_name='central')
     state_in = make_state(relations=[upstream])
@@ -522,7 +534,7 @@ def test_status_warns_about_a_bridge_that_carries_nothing(
 
 
 def test_status_asks_for_a_certificate_authority(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """tls-port defaults to 8883, but the listener cannot open without a certificate."""
     state_out = ctx.run(ctx.on.update_status(), make_state())
@@ -533,7 +545,7 @@ def test_status_asks_for_a_certificate_authority(
 
 
 def test_status_is_plain_active_when_there_is_nothing_to_say(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'tls-port': 0, 'tls-websockets-port': 0})
 
@@ -561,7 +573,7 @@ def test_status_is_plain_active_when_there_is_nothing_to_say(
     ],
 )
 def test_the_change_a_reconfiguration_needs(
-    ctx: testing.Context[Any],
+    ctx: testing.Context[charm.MosquittoCharm],
     fake: conftest.FakeMosquitto,
     config: dict[str, Any],
     expected: mosquitto.Change,
@@ -575,7 +587,7 @@ def test_the_change_a_reconfiguration_needs(
 
 
 def test_a_service_override_change_forces_a_restart(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """The file descriptor limit lives in a systemd drop-in, which a reload will not read."""
     first = ctx.run(ctx.on.start(), make_state())
@@ -595,7 +607,7 @@ def test_a_service_override_change_forces_a_restart(
 
 
 def test_passwords_are_created_once_and_then_reused(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     first = ctx.run(ctx.on.start(), make_state())
     created = dict(fake.users)
@@ -608,16 +620,19 @@ def test_passwords_are_created_once_and_then_reused(
 
 
 def test_setting_an_unchanged_password_makes_no_new_revision(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, monkeypatch: pytest.MonkeyPatch
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """Every revision wakes every observer of the secret, so they are not free."""
     calls: list[dict[str, str]] = []
     original = ops.Secret.set_content
-    monkeypatch.setattr(
-        ops.Secret,
-        'set_content',
-        lambda self, content: (calls.append(content), original(self, content))[1],
-    )
+
+    def set_content(self: ops.Secret, content: dict[str, str]) -> None:
+        calls.append(content)
+        original(self, content)
+
+    monkeypatch.setattr(ops.Secret, 'set_content', set_content)
     state_in = make_state(
         peer=peer_relation({'alice': {'owner': 'action', 'acl': []}}),
         secrets=[user_secret('alice', 'hunter2')],
@@ -632,7 +647,7 @@ def test_setting_an_unchanged_password_makes_no_new_revision(
 
 
 def test_setting_a_changed_password_does_make_a_revision(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(
         peer=peer_relation({'alice': {'owner': 'action', 'acl': []}}),
@@ -650,7 +665,7 @@ def test_setting_a_changed_password_does_make_a_revision(
 
 
 def test_removing_a_user_forgets_the_password(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(
         peer=peer_relation({'alice': {'owner': 'action', 'acl': []}}),
@@ -674,7 +689,9 @@ def test_removing_a_user_forgets_the_password(
 # --------------------------------------------------------------------------------------
 
 
-def test_set_password_generates_one(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_set_password_generates_one(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_out = ctx.run(ctx.on.action('set-password', params={'username': 'alice'}), make_state())
 
     assert ctx.action_results is not None
@@ -690,7 +707,7 @@ def test_set_password_generates_one(ctx: testing.Context[Any], fake: conftest.Fa
 
 @pytest.mark.parametrize('existing', [False, True])
 def test_set_password_returns_the_secret_id(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, existing: bool
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, existing: bool
 ):
     """The id is the only thing that tells an operator where the password went.
 
@@ -715,7 +732,9 @@ def test_set_password_returns_the_secret_id(
     assert secret_id.startswith('secret:')
 
 
-def test_set_password_accepts_one(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_set_password_accepts_one(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     ctx.run(
         ctx.on.action('set-password', params={'username': 'alice', 'password': 's3cret'}),
         make_state(),
@@ -727,7 +746,7 @@ def test_set_password_accepts_one(ctx: testing.Context[Any], fake: conftest.Fake
 
 
 def test_set_password_refuses_a_reserved_username(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """The charm's own users carry a broker-wide `$SYS` grant nobody else may inherit."""
     with pytest.raises(testing.ActionFailed) as excinfo:
@@ -737,7 +756,7 @@ def test_set_password_refuses_a_reserved_username(
 
 
 def test_set_password_refuses_a_username_with_a_colon(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     with pytest.raises(testing.ActionFailed) as excinfo:
         ctx.run(ctx.on.action('set-password', params={'username': 'a:b'}), make_state())
@@ -745,14 +764,18 @@ def test_set_password_refuses_a_username_with_a_colon(
     assert 'colon' in excinfo.value.message
 
 
-def test_remove_user_needs_a_user(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_remove_user_needs_a_user(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     with pytest.raises(testing.ActionFailed) as excinfo:
         ctx.run(ctx.on.action('remove-user', params={'username': 'nobody'}), make_state())
 
     assert excinfo.value.message == 'There is no user called nobody.'
 
 
-def test_list_users_never_leaks_passwords(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_list_users_never_leaks_passwords(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_in = make_state(
         peer=peer_relation(
             {
@@ -777,7 +800,9 @@ def test_list_users_never_leaks_passwords(ctx: testing.Context[Any], fake: conft
     assert mosquitto.HEALTH_USER not in listed
 
 
-def test_grant_adds_a_permission(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_grant_adds_a_permission(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_in = make_state(
         peer=peer_relation({'alice': {'owner': 'action', 'acl': []}}),
         secrets=[user_secret('alice', 'hunter2')],
@@ -792,7 +817,7 @@ def test_grant_adds_a_permission(ctx: testing.Context[Any], fake: conftest.FakeM
 
 
 def test_grant_replaces_the_previous_access_to_the_same_topic(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(
         peer=peer_relation({'alice': {'owner': 'action', 'acl': [['sensors/#', 'readwrite']]}}),
@@ -809,7 +834,9 @@ def test_grant_replaces_the_previous_access_to_the_same_topic(
     assert stored_users(state_out)['alice']['acl'] == [['sensors/#', 'read']]
 
 
-def test_grant_needs_a_user(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_grant_needs_a_user(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     with pytest.raises(testing.ActionFailed) as excinfo:
         ctx.run(
             ctx.on.action('grant', params={'username': 'nobody', 'topic': 'a/#'}), make_state()
@@ -819,7 +846,7 @@ def test_grant_needs_a_user(ctx: testing.Context[Any], fake: conftest.FakeMosqui
 
 
 def test_grant_rejects_an_unknown_access_level(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     with pytest.raises(testing.ActionFailed):
         ctx.run(
@@ -830,7 +857,9 @@ def test_grant_rejects_an_unknown_access_level(
         )
 
 
-def test_revoke_removes_a_permission(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_revoke_removes_a_permission(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_in = make_state(
         peer=peer_relation({'alice': {'owner': 'action', 'acl': [['sensors/#', 'read']]}}),
         secrets=[user_secret('alice', 'hunter2')],
@@ -844,7 +873,9 @@ def test_revoke_removes_a_permission(ctx: testing.Context[Any], fake: conftest.F
     assert fake.rules['alice'] == []
 
 
-def test_revoke_needs_a_user(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_revoke_needs_a_user(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     with pytest.raises(testing.ActionFailed) as excinfo:
         ctx.run(
             ctx.on.action('revoke', params={'username': 'nobody', 'topic': 'a/#'}), make_state()
@@ -853,7 +884,9 @@ def test_revoke_needs_a_user(ctx: testing.Context[Any], fake: conftest.FakeMosqu
     assert excinfo.value.message == 'There is no user called nobody.'
 
 
-def test_revoke_needs_the_permission(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_revoke_needs_the_permission(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_in = make_state(
         peer=peer_relation({'alice': {'owner': 'action', 'acl': []}}),
         secrets=[user_secret('alice', 'hunter2')],
@@ -870,7 +903,7 @@ def test_revoke_needs_the_permission(ctx: testing.Context[Any], fake: conftest.F
     ['set-password', 'remove-user', 'grant', 'revoke', 'restore-backup'],
 )
 def test_the_leader_only_actions_fail_cleanly_on_a_follower(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, action: str
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, action: str
 ):
     params = {
         'set-password': {'username': 'alice'},
@@ -889,7 +922,7 @@ def test_the_leader_only_actions_fail_cleanly_on_a_follower(
 
 
 def test_health_check_checks_both_listeners(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, certificates: None
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, certificates: None
 ):
     state_in = make_state(relations=[testing.Relation('certificates', remote_app_name='ca')])
 
@@ -904,7 +937,7 @@ def test_health_check_checks_both_listeners(
 
 
 def test_health_check_can_check_one_listener(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     ctx.run(ctx.on.action('health-check', params={'listener': 'plain'}), make_state())
 
@@ -913,7 +946,7 @@ def test_health_check_can_check_one_listener(
 
 
 def test_health_check_fails_when_the_broker_does_not_answer(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.health = (False, 'no response from 127.0.0.1:1883 within 10s')
 
@@ -924,7 +957,9 @@ def test_health_check_fails_when_the_broker_does_not_answer(
     assert excinfo.value.state is not None
 
 
-def test_health_check_needs_a_listener(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_health_check_needs_a_listener(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_in = make_state(config={'port': 0, 'websockets-port': 9001})
 
     with pytest.raises(testing.ActionFailed) as excinfo:
@@ -934,7 +969,7 @@ def test_health_check_needs_a_listener(ctx: testing.Context[Any], fake: conftest
 
 
 def test_health_check_says_when_there_is_no_tls_listener(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """tls-port is set by default, but the listener only exists with a certificate."""
     with pytest.raises(testing.ActionFailed) as excinfo:
@@ -944,7 +979,7 @@ def test_health_check_says_when_there_is_no_tls_listener(
 
 
 def test_health_check_needs_valid_configuration(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'persistent-client-expiration': 'forever'})
 
@@ -955,7 +990,7 @@ def test_health_check_needs_valid_configuration(
 
 
 def test_broker_stats_returns_the_sys_tree(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.sys_tree = {'$SYS/broker/clients/connected': '3'}
 
@@ -966,7 +1001,7 @@ def test_broker_stats_returns_the_sys_tree(
 
 
 def test_broker_stats_fails_when_sys_is_empty(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.sys_tree = {}
 
@@ -977,7 +1012,7 @@ def test_broker_stats_fails_when_sys_is_empty(
 
 
 def test_broker_stats_needs_the_plaintext_listener(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(config={'port': 0, 'websockets-port': 9001})
 
@@ -987,7 +1022,7 @@ def test_broker_stats_needs_the_plaintext_listener(
     assert excinfo.value.message == 'The plaintext listener is needed to read the $SYS tree.'
 
 
-def test_create_backup(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_create_backup(ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto):
     ctx.run(ctx.on.action('create-backup'), make_state())
 
     assert ctx.action_results is not None
@@ -997,7 +1032,9 @@ def test_create_backup(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
 
 
 def test_create_backup_at_a_chosen_path(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, tmp_path: pathlib.Path
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    tmp_path: pathlib.Path,
 ):
     destination = tmp_path / 'somewhere' / 'backup.tar.gz'
 
@@ -1009,7 +1046,9 @@ def test_create_backup_at_a_chosen_path(
 
 
 def test_restore_backup_stops_and_restarts_the_broker(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, tmp_path: pathlib.Path
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    tmp_path: pathlib.Path,
 ):
     backup = tmp_path / 'backup.tar.gz'
     backup.write_bytes(b'tarball')
@@ -1026,7 +1065,7 @@ def test_restore_backup_stops_and_restarts_the_broker(
 
 
 def test_restore_backup_fails_cleanly_on_a_bad_tarball(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.running = True
 
@@ -1040,7 +1079,7 @@ def test_restore_backup_fails_cleanly_on_a_bad_tarball(
 
 
 def test_force_reconfigure_removes_the_fragments_and_reconciles(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     first = ctx.run(ctx.on.start(), make_state())
     paths = fake.paths('archive')
@@ -1055,7 +1094,9 @@ def test_force_reconfigure_removes_the_fragments_and_reconciles(
     assert ('listener', '1883') in directives(fake.main_config)
 
 
-def test_pause_stops_everything(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_pause_stops_everything(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     fake.running = True
     fake.exporter.installed = True
 
@@ -1068,7 +1109,9 @@ def test_pause_stops_everything(ctx: testing.Context[Any], fake: conftest.FakeMo
     assert relation.local_unit_data['paused'] == 'true'
 
 
-def test_resume_starts_again(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_resume_starts_again(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     state_in = make_state(peer=peer_relation(paused=True))
 
     state_out = ctx.run(ctx.on.action('resume'), state_in)
@@ -1088,7 +1131,7 @@ def test_resume_starts_again(ctx: testing.Context[Any], fake: conftest.FakeMosqu
 
 
 def test_a_client_gets_a_user_permissions_and_endpoints(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     relation = testing.Relation(
         'mqtt',
@@ -1119,7 +1162,7 @@ def test_a_client_gets_a_user_permissions_and_endpoints(
 
 
 def test_a_client_can_use_its_credentials_immediately(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     relation = testing.Relation(
         'mqtt',
@@ -1136,7 +1179,7 @@ def test_a_client_can_use_its_credentials_immediately(
 
 
 def test_a_second_reconcile_installs_the_client(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """What the charm does today: the client works from the next event onwards."""
     relation = testing.Relation(
@@ -1154,7 +1197,7 @@ def test_a_second_reconcile_installs_the_client(
 
 
 def test_a_request_for_the_sys_tree_is_refused(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """`$SYS` exposes every client id and topic count on the broker."""
     relation = testing.Relation(
@@ -1176,7 +1219,7 @@ def test_a_request_for_the_sys_tree_is_refused(
 
 
 def test_a_permission_with_no_access_level_never_reaches_the_charm(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """The interface drops permissions it cannot turn into an ACL line.
 
@@ -1197,7 +1240,7 @@ def test_a_permission_with_no_access_level_never_reaches_the_charm(
 
 
 def test_an_unknown_access_level_is_granted_as_readwrite(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     with ctx(ctx.on.update_status(), make_state()) as manager:
         granted = manager.charm._grant_for(
@@ -1213,7 +1256,7 @@ def test_an_unknown_access_level_is_granted_as_readwrite(
 
 
 def test_a_departing_client_loses_its_user(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     relation = testing.Relation(
         'mqtt',
@@ -1238,7 +1281,9 @@ def test_a_departing_client_loses_its_user(
     ]
 
 
-def test_a_follower_publishes_nothing(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_a_follower_publishes_nothing(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     relation = testing.Relation(
         'mqtt',
         remote_app_name='telemetry',
@@ -1257,7 +1302,7 @@ def test_a_follower_publishes_nothing(ctx: testing.Context[Any], fake: conftest.
 
 
 def test_tls_listeners_appear_once_a_certificate_arrives(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, certificates: None
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, certificates: None
 ):
     state_in = make_state(
         relations=[testing.Relation('certificates', remote_app_name='ca')],
@@ -1278,7 +1323,7 @@ def test_tls_listeners_appear_once_a_certificate_arrives(
 
 
 def test_no_tls_listener_without_a_certificate(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """Opening a TLS listener with no certificate leaves the broker refusing to start."""
     ctx.run(ctx.on.config_changed(), make_state())
@@ -1289,11 +1334,17 @@ def test_no_tls_listener_without_a_certificate(
 
 
 def test_no_tls_material_while_the_authority_has_not_issued(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, monkeypatch: pytest.MonkeyPatch
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+
+    def get_assigned_certificate(self: object, request: object) -> tuple[None, None]:
+        return None, None
+
     monkeypatch.setattr(
         'charmlibs.interfaces.tls_certificates.TLSCertificatesRequiresV4.get_assigned_certificate',
-        lambda self, request: (None, None),
+        get_assigned_certificate,
     )
     state_in = make_state(relations=[testing.Relation('certificates', remote_app_name='ca')])
 
@@ -1303,7 +1354,7 @@ def test_no_tls_material_while_the_authority_has_not_issued(
 
 
 def test_the_ca_reaches_related_clients(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, certificates: None
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, certificates: None
 ):
     relation = testing.Relation(
         'mqtt',
@@ -1329,7 +1380,7 @@ def test_the_ca_reaches_related_clients(
 
 
 def test_the_bridge_is_refused_on_a_vulnerable_mosquitto(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """Mosquitto before 2.0.19 is vulnerable to CVE-2024-3935 through a bridge.
 
@@ -1348,7 +1399,7 @@ def test_the_bridge_is_refused_on_a_vulnerable_mosquitto(
 
 
 def test_the_bridge_is_rendered_on_a_patched_mosquitto(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.version = '2.0.19'
     upstream = testing.Relation(
@@ -1368,7 +1419,7 @@ def test_the_bridge_is_rendered_on_a_patched_mosquitto(
 
 
 def test_the_bridge_prefers_a_tls_endpoint(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.version = '2.0.19'
     upstream = testing.Relation(
@@ -1393,7 +1444,9 @@ def test_the_bridge_prefers_a_tls_endpoint(
     assert fake.bridge_ca == CA
 
 
-def test_a_bridge_with_no_topics_says_so(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_a_bridge_with_no_topics_says_so(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     fake.version = '2.0.19'
     upstream = testing.Relation(
         'upstream', remote_app_name='central', remote_app_data=upstream_databag()
@@ -1406,7 +1459,7 @@ def test_a_bridge_with_no_topics_says_so(ctx: testing.Context[Any], fake: confte
 
 
 def test_the_upstream_request_asks_for_no_topic_permissions(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """What the edge asks the central broker for, which is currently nothing.
 
@@ -1422,7 +1475,9 @@ def test_the_upstream_request_asks_for_no_topic_permissions(
     assert json.loads(databag['topic-permissions']) is None
 
 
-def test_no_bridge_without_an_upstream(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_no_bridge_without_an_upstream(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     ctx.run(ctx.on.config_changed(), make_state(config={'bridge-topics': 'topic sensors/# out'}))
 
     assert fake.bridge_config is None
@@ -1434,7 +1489,7 @@ def test_no_bridge_without_an_upstream(ctx: testing.Context[Any], fake: conftest
 
 
 def test_the_exporter_is_installed_when_something_is_collecting(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(relations=[testing.Relation('cos-agent', remote_app_name='agent')])
 
@@ -1448,7 +1503,7 @@ def test_the_exporter_is_installed_when_something_is_collecting(
 
 
 def test_the_exporter_is_not_installed_without_a_collector(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     ctx.run(ctx.on.config_changed(), make_state())
 
@@ -1457,7 +1512,7 @@ def test_the_exporter_is_not_installed_without_a_collector(
 
 
 def test_the_exporter_goes_away_when_sys_is_switched_off(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     """With `$SYS` disabled there is nothing for the exporter to read."""
     state_in = make_state(
@@ -1471,7 +1526,7 @@ def test_the_exporter_goes_away_when_sys_is_switched_off(
 
 
 def test_the_exporter_needs_the_plaintext_listener(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(
         relations=[testing.Relation('cos-agent', remote_app_name='agent')],
@@ -1490,7 +1545,7 @@ def test_the_exporter_needs_the_plaintext_listener(
 
 
 def test_a_fully_integrated_deployment(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto, certificates: None
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, certificates: None
 ):
     """Every endpoint related at once, which is what `from_context` gives us."""
     fake.version = '2.0.19'
@@ -1515,7 +1570,7 @@ def test_a_fully_integrated_deployment(
 
 
 def test_without_a_peer_relation_there_are_no_users(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = testing.State(leader=True, model=LXD)
 
@@ -1525,7 +1580,7 @@ def test_without_a_peer_relation_there_are_no_users(
 
 
 def test_without_a_peer_relation_a_new_user_cannot_be_saved(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = testing.State(leader=True, model=LXD)
 
@@ -1535,7 +1590,7 @@ def test_without_a_peer_relation_a_new_user_cannot_be_saved(
 
 
 def test_without_a_peer_relation_pausing_still_stops_the_broker(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     fake.running = True
 
@@ -1544,7 +1599,9 @@ def test_without_a_peer_relation_pausing_still_stops_the_broker(
     assert not fake.running
 
 
-def test_a_corrupt_user_list_is_ignored(ctx: testing.Context[Any], fake: conftest.FakeMosquitto):
+def test_a_corrupt_user_list_is_ignored(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
     """Somebody editing relation data by hand must not put the unit into error."""
     peer = testing.PeerRelation(PEER, local_app_data={'users': 'not json at all'})
     state_in = make_state(peer=peer)
@@ -1556,7 +1613,7 @@ def test_a_corrupt_user_list_is_ignored(ctx: testing.Context[Any], fake: conftes
 
 
 def test_a_user_list_that_is_not_a_mapping_is_ignored(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     peer = testing.PeerRelation(PEER, local_app_data={'users': '["alice"]'})
     state_in = make_state(peer=peer)
@@ -1567,7 +1624,7 @@ def test_a_user_list_that_is_not_a_mapping_is_ignored(
 
 
 def test_removing_a_user_that_has_no_secret(
-    ctx: testing.Context[Any], fake: conftest.FakeMosquitto
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
     state_in = make_state(peer=peer_relation({'alice': {'owner': 'action', 'acl': []}}))
 

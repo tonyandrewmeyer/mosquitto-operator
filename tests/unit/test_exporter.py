@@ -330,7 +330,7 @@ def test_map_topic(
     name: str,
     labels: tuple[tuple[str, str], ...],
     value: float,
-    kind: str,
+    kind: exporter.MetricKind,
 ):
     assert exporter.map_topic(topic, payload) == [
         exporter.Sample(name, labels, value, kind, exporter.map_topic(topic, payload)[0].help)
@@ -681,10 +681,10 @@ class FakeHandler(exporter.MetricsHandler):
     def __init__(self, registry: exporter.Registry, path: str):
         self._registry = registry
         self.path = path
-        self.responses: list[tuple[int, str, str]] = []
+        self.sent: list[tuple[int, str, str]] = []
 
     def _respond(self, status: int, content_type: str, body: str) -> None:
-        self.responses.append((status, content_type, body))
+        self.sent.append((status, content_type, body))
 
 
 @pytest.mark.parametrize(
@@ -700,17 +700,17 @@ class FakeHandler(exporter.MetricsHandler):
 def test_handler_routes(path: str, status: int, content_type: str, needle: str):
     handler = FakeHandler(exporter.Registry(), path)
     handler.do_GET()
-    assert len(handler.responses) == 1
-    assert handler.responses[0][0] == status
-    assert handler.responses[0][1] == content_type
-    assert needle in handler.responses[0][2]
+    assert len(handler.sent) == 1
+    assert handler.sent[0][0] == status
+    assert handler.sent[0][1] == content_type
+    assert needle in handler.sent[0][2]
 
 
 def test_handler_serves_200_before_anything_is_received():
     """A broker we cannot reach must still produce a scrapeable mosquitto_up 0."""
     handler = FakeHandler(exporter.Registry(), '/metrics')
     handler.do_GET()
-    status, _, body = handler.responses[0]
+    status, _, body = handler.sent[0]
     assert status == 200
     assert 'mosquitto_up 0' in body
 
@@ -720,7 +720,11 @@ def test_handler_log_message_goes_to_debug(
 ):
     caplog.set_level(logging.DEBUG, logger='mosquitto-exporter')
     handler = FakeHandler(exporter.Registry(), '/')
-    monkeypatch.setattr(FakeHandler, 'address_string', lambda self: '127.0.0.1', raising=False)
+
+    def address_string(self: FakeHandler) -> str:
+        return '127.0.0.1'
+
+    monkeypatch.setattr(FakeHandler, 'address_string', address_string, raising=False)
     handler.log_message('%s %s', 'GET', '/')
     assert 'GET /' in caplog.text
 
@@ -1013,7 +1017,13 @@ def test_run_subscriber_caps_the_backoff(monkeypatch: pytest.MonkeyPatch):
         raise OSError('no such file')
 
     monkeypatch.setattr(subprocess, 'Popen', fake_popen)
-    monkeypatch.setattr(stop, 'wait', lambda timeout=None: waits.append(timeout) or stop.is_set())
+
+    def fake_wait(timeout: float | None = None) -> bool:
+        assert timeout is not None
+        waits.append(timeout)
+        return stop.is_set()
+
+    monkeypatch.setattr(stop, 'wait', fake_wait)
     exporter.run_subscriber(['/usr/bin/nope'], {}, exporter.Registry(), stop, max_backoff=4.0)
 
     assert max(waits) == 4.0
@@ -1121,13 +1131,19 @@ def test_handler_respond_writes_a_complete_response(monkeypatch: pytest.MonkeyPa
     handler = FakeHandler(exporter.Registry(), '/metrics')
     sent: list[tuple[str, object]] = []
     written = io.BytesIO()
-    monkeypatch.setattr(
-        FakeHandler, 'send_response', lambda self, code: sent.append(('status', code))
-    )
-    monkeypatch.setattr(
-        FakeHandler, 'send_header', lambda self, key, value: sent.append((key, value))
-    )
-    monkeypatch.setattr(FakeHandler, 'end_headers', lambda self: sent.append(('end', None)))
+
+    def send_response(self: FakeHandler, code: int) -> None:
+        sent.append(('status', code))
+
+    def send_header(self: FakeHandler, key: str, value: str) -> None:
+        sent.append((key, value))
+
+    def end_headers(self: FakeHandler) -> None:
+        sent.append(('end', None))
+
+    monkeypatch.setattr(FakeHandler, 'send_response', send_response)
+    monkeypatch.setattr(FakeHandler, 'send_header', send_header)
+    monkeypatch.setattr(FakeHandler, 'end_headers', end_headers)
     handler.wfile = written
 
     exporter.MetricsHandler._respond(handler, 200, 'text/plain', 'hello\n')
@@ -1186,7 +1202,13 @@ def test_run_subscriber_resets_the_backoff_after_a_long_run(monkeypatch: pytest.
 
     monkeypatch.setattr(subprocess, 'Popen', fake_popen)
     monkeypatch.setattr(exporter.time, 'monotonic', lambda: next(clock))
-    monkeypatch.setattr(stop, 'wait', lambda timeout=None: waits.append(timeout) or stop.is_set())
+
+    def fake_wait(timeout: float | None = None) -> bool:
+        assert timeout is not None
+        waits.append(timeout)
+        return stop.is_set()
+
+    monkeypatch.setattr(stop, 'wait', fake_wait)
     exporter.run_subscriber(
         ['/usr/bin/mosquitto_sub'], {}, exporter.Registry(), stop, max_backoff=8.0
     )

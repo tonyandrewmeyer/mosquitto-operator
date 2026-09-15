@@ -23,7 +23,7 @@ import mosquitto
 import mqtt
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -188,10 +188,9 @@ class MosquittoCharm(ops.CharmBase):
         sans_dns = {fqdn, socket.gethostname()}
         sans_ip: set[str] = set()
         binding = self.model.get_binding('mqtt') or self.model.get_binding(PEER)
-        if binding is not None:
-            for address in (binding.network.bind_address, binding.network.ingress_address):
-                if address is not None:
-                    sans_ip.add(str(address))
+        for address in (binding.network.bind_address, binding.network.ingress_address):
+            if address is not None:
+                sans_ip.add(str(address))
         if settings is not None:
             sans_dns.update(settings.extra_sans_dns)
         return [
@@ -463,6 +462,7 @@ class MosquittoCharm(ops.CharmBase):
                 logger.error('Recent Mosquitto log:\n%s', journal)
             return
 
+        self._open_ports(settings, have_tls=material is not None)
         self._reconcile_exporter(settings, paths, users)
         self._publish_mqtt(settings, material is not None)
 
@@ -511,11 +511,7 @@ class MosquittoCharm(ops.CharmBase):
 
         for username, record in self._load_users().items():
             users[username] = self._password_for(username)
-            acl = record.get('acl')
-            rules[username] = [
-                (str(topic), str(access))
-                for topic, access in (acl if isinstance(acl, list) else [])
-            ]
+            rules[username] = [(topic, access) for topic, access in self._stored_acl(record)]
         return users, rules
 
     def _sync_relation_users(self) -> dict[int, tuple[str, list[tuple[str, str]]]]:
@@ -530,7 +526,7 @@ class MosquittoCharm(ops.CharmBase):
         changed = False
         for relation_id, request in self.mqtt.get_requests().items():
             relation = self.model.get_relation('mqtt', relation_id)
-            if relation is None or relation.app is None:
+            if relation is None:
                 continue
             username = f'{relation.app.name}-{relation_id}'
             granted = self._grant_for(request.topic_permissions)
@@ -575,6 +571,12 @@ class MosquittoCharm(ops.CharmBase):
             return None, mosquitto.Change.NONE
 
         endpoint = sorted(connection.endpoints, key=lambda e: (not e.tls, e.port))[0]
+        if endpoint.host is None or endpoint.port is None:
+            # An endpoint without a host and a port is discarded when the databag is
+            # parsed, so this is unreachable; it is here because nothing in the type
+            # of BrokerConnection says so.
+            logger.warning('The upstream broker published no usable endpoint.')
+            return None, mosquitto.Change.NONE
         change = mosquitto.Change.NONE
         if connection.tls_ca:
             change = mosquitto.write_bridge_ca(paths, connection.tls_ca)
@@ -599,6 +601,25 @@ class MosquittoCharm(ops.CharmBase):
             client_id=self.unit.name.replace('/', '-'),
         )
         return mosquitto.render_bridge_config(bridge, paths), change
+
+    def _open_ports(self, settings: config.MosquittoConfig, *, have_tls: bool) -> None:
+        """Tell Juju which ports the broker listens on.
+
+        Without this, `juju expose` opens nothing, and on a cloud that firewalls
+        machines the listeners are unreachable from outside the model however the
+        broker is configured. The metrics port is deliberately left out: it is for the
+        observability subordinate on the same machine, and nothing outside the model
+        has any business reaching it.
+        """
+        ports = {
+            ops.Port('tcp', settings.port) if settings.port else None,
+            ops.Port('tcp', settings.websockets_port) if settings.websockets_port else None,
+            ops.Port('tcp', settings.tls_port) if have_tls and settings.tls_port else None,
+            ops.Port('tcp', settings.tls_websockets_port)
+            if have_tls and settings.tls_websockets_port
+            else None,
+        }
+        self.unit.set_ports(*(port for port in ports if port is not None))
 
     def _reconcile_exporter(
         self,
@@ -642,7 +663,7 @@ class MosquittoCharm(ops.CharmBase):
         data: Juju 4.0 no longer maintains that field.
         """
         binding = self.model.get_binding('mqtt') or self.model.get_binding(PEER)
-        if binding is None or binding.network.bind_address is None:
+        if binding.network.bind_address is None:
             return None
         return str(binding.network.bind_address)
 
@@ -710,12 +731,44 @@ class MosquittoCharm(ops.CharmBase):
                 ],
             )
 
-    def _grant_for(self, requested: Sequence[mqtt.TopicPermission]) -> list[tuple[str, str]]:
+    @staticmethod
+    def _stored_acl(record: Mapping[str, object]) -> list[list[str]]:
+        """The topic permissions recorded for one user.
+
+        The user list is JSON read back out of the peer databag, so nothing about its
+        shape is guaranteed; a record that is not a list of pairs is treated as if the
+        user had no permissions, exactly as an unparsable user list is treated as
+        having no users.
+
+        Args:
+            record: one entry from the user list.
+
+        Returns:
+            The stored `[topic, access]` pairs.
+        """
+        acl = record.get('acl')
+        if not isinstance(acl, list):
+            return []
+        return [
+            [str(entry[0]), str(entry[1])]
+            for entry in acl
+            if isinstance(entry, (list, tuple)) and len(entry) == 2
+        ]
+
+    def _grant_for(self, requested: Iterable[mqtt.TopicPermission]) -> list[tuple[str, str]]:
         """Decide what a client actually gets, given what it asked for.
 
         Requests are granted as made, except that nothing may reach `$SYS`: the
         statistics tree exposes every client id and every topic count on the broker,
         and a client asking for it is almost always asking by accident.
+
+        Args:
+            requested: the permissions the client asked for. This is typically a
+                `frozenset`, which iterates in hash order.
+
+        Returns:
+            The granted `(filter, access)` pairs, sorted, so that a request that has
+            not changed does not rewrite the stored ACL on every hook.
         """
         granted: list[tuple[str, str]] = []
         for permission in requested:
@@ -732,7 +785,7 @@ class MosquittoCharm(ops.CharmBase):
             if access is mqtt.Access.UNKNOWN:
                 access = mqtt.Access.READWRITE
             granted.append((permission.filter, str(access)))
-        return granted
+        return sorted(granted)
 
     # --- Pausing -------------------------------------------------------------
 
@@ -876,7 +929,7 @@ class MosquittoCharm(ops.CharmBase):
                 f'set-password action first.'
             )
             return
-        acl = [entry for entry in record.get('acl', []) if entry[0] != params.topic]
+        acl = [entry for entry in self._stored_acl(record) if entry[0] != params.topic]
         acl.append([params.topic, str(params.access)])
         record['acl'] = sorted(acl)
         self._save_users(users)
@@ -893,8 +946,9 @@ class MosquittoCharm(ops.CharmBase):
         if record is None:
             event.fail(f'There is no user called {params.username}.')
             return
-        acl = [entry for entry in record.get('acl', []) if entry[0] != params.topic]
-        if len(acl) == len(record.get('acl', [])):
+        stored = self._stored_acl(record)
+        acl = [entry for entry in stored if entry[0] != params.topic]
+        if len(acl) == len(stored):
             event.fail(f'{params.username} has no permission for {params.topic}.')
             return
         record['acl'] = acl

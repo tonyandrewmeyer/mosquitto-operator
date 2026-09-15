@@ -757,7 +757,7 @@ def read_password(path: str) -> str:
 
 
 @contextlib.contextmanager
-def subscriber_environment(password: str | None) -> typing.Iterator[dict[str, str]]:
+def subscriber_environment(password: str | None) -> typing.Generator[dict[str, str]]:
     """Provide an environment that hands the password to ``mosquitto_sub`` safely.
 
     ``mosquitto_sub`` has no way to read a password from a file or from stdin, and

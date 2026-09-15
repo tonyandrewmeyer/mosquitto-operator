@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from charmlibs import apt, pathops, snap, sysctl, systemd
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Generator, Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -1343,7 +1343,7 @@ def is_running(file_paths: Paths) -> bool:
 
 
 @contextlib.contextmanager
-def _client_config(file_paths: Paths, password: str) -> Iterator[Mapping[str, str]]:
+def _client_config(file_paths: Paths, password: str) -> Generator[Mapping[str, str]]:
     """Yield an environment that gives the Mosquitto client tools a password.
 
     The client tools read default options from `$XDG_CONFIG_HOME/mosquitto_<tool>`.

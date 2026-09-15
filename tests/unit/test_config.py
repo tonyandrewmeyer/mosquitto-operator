@@ -26,7 +26,7 @@ def test_defaults_are_valid():
 def test_config_is_frozen():
     settings = make()
     with pytest.raises(pydantic.ValidationError):
-        settings.port = 1884  # type: ignore[misc]
+        settings.port = 1884
 
 
 @pytest.mark.parametrize('value', ['14d', '1h', '52w', '6m', '0d', ''])
@@ -242,7 +242,10 @@ def test_set_password_without_a_password():
 
 @pytest.mark.parametrize('access', ['read', 'write', 'readwrite', 'deny'])
 def test_grant_access_levels(access: str):
-    assert str(config.GrantParams(username='a', topic='t', access=access).access) == access
+    # Action parameters arrive as strings, so validate from a mapping rather than
+    # constructing with an already-typed enum member.
+    params = config.GrantParams.model_validate({'username': 'a', 'topic': 't', 'access': access})
+    assert str(params.access) == access
 
 
 def test_grant_defaults_to_readwrite():
@@ -253,17 +256,19 @@ def test_grant_defaults_to_readwrite():
 def test_grant_rejects_the_unknown_placeholder():
     """UNKNOWN exists so a newer peer's value deserialises; it is not a real level."""
     with pytest.raises(pydantic.ValidationError, match='read, write, readwrite or deny'):
-        config.GrantParams(username='alice', topic='t', access='UNKNOWN')
+        config.GrantParams.model_validate({'username': 'alice', 'topic': 't', 'access': 'UNKNOWN'})
 
 
 def test_grant_rejects_an_invented_access_level():
     with pytest.raises(pydantic.ValidationError):
-        config.GrantParams(username='alice', topic='t', access='admin')
+        config.GrantParams.model_validate({'username': 'alice', 'topic': 't', 'access': 'admin'})
 
 
 @pytest.mark.parametrize('listener', ['plain', 'tls', 'all'])
 def test_health_check_listeners(listener: str):
-    assert str(config.HealthCheckParams(listener=listener).listener) == listener
+    assert (
+        str(config.HealthCheckParams.model_validate({'listener': listener}).listener) == listener
+    )
 
 
 def test_health_check_defaults_to_all():

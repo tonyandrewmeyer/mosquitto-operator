@@ -232,9 +232,17 @@ In priority order.
    `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
    `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`,
    `SystemCallFilter=@system-service`, `RestrictNamespaces`, `LockPersonality`,
-   `RestrictSUIDSGID`. Two caveats: `ProtectSystem=strict` breaks the shipped
-   `ExecStartPre` mkdirs, so use `StateDirectory=`/`LogsDirectory=`/
-   `RuntimeDirectory=` instead; and `MemoryDenyWriteExecute` must be dropped if a
+   `RestrictSUIDSGID`.
+
+   Two things here were wrong until they were tried on a real broker. **`ProtectSystem`
+   must be `full`, not `strict`**: strict makes the whole filesystem read-only and
+   breaks the packaged unit's own `ExecStartPre` mkdir and chown before the broker
+   even runs, and `StateDirectory=`/`LogsDirectory=` are not a drop-in replacement
+   because they create the directories owned by the service user, which is root here.
+   And **`SystemCallFilter=~@privileged` kills the broker with SIGSYS**: Mosquitto
+   starts as root so that it can bind a privileged port, then calls `setuid` and
+   `setgid` to drop privileges, and both are in `@privileged`. `@system-service` alone
+   is the right filter. Separately, `MemoryDenyWriteExecute` must be dropped if a
    third-party auth plugin with a JIT is loaded.
 7. `libwrap` is linked in, so `/etc/hosts.allow` and `/etc/hosts.deny` still apply.
 
@@ -253,6 +261,14 @@ In priority order.
 `persistent_client_expiration`, `queue_qos0_messages`, `retain_available`,
 `set_tcp_nodelay`, `sys_interval`, `upgrade_outgoing_qos`, `global_max_*` — **and
 every bridge `connection` block** (bridges are added, removed and restarted live).
+
+Note that the charm does **not** take advantage of that last one. `classify_change`
+treats anything not on an explicit allow-list as needing a restart, and the bridge
+directives are not on it, so adding or removing a bridge disconnects every client of
+that broker. That is the conservative default working as designed — the reload-safe
+set differs between 2.0 and 2.1, and the cost of guessing wrong the other way is a
+broker running a configuration nobody asked for — but it is a real, user-visible
+consequence worth knowing about.
 
 SIGHUP also **re-reads the TLS certificate and key file contents** and reopens the
 log file. So certificate renewal at unchanged paths needs only a reload.

@@ -311,6 +311,24 @@ def _stable(items: frozenset[_Item] | None) -> list[dict[str, Any]] | None:
     return sorted(dumped, key=lambda item: json.dumps(item, sort_keys=True))
 
 
+def _hyphenated(name: str) -> str:
+    """Map a Python field name to its name on the wire.
+
+    Every multi-word field in this interface is hyphenated on the wire. Generating
+    the aliases rather than spelling `alias=` out on each field keeps the two names
+    in step, and lets type checkers see the models' real `__init__` signature: a
+    per-field `alias=` renames the synthesised parameter, so constructing a model by
+    field name -- which `populate_by_name` permits -- would not type check.
+
+    Args:
+        name: the Python field name.
+
+    Returns:
+        The key used in the databag.
+    """
+    return name.replace('_', '-')
+
+
 # --------------------------------------------------------------------------------------
 # Databag models
 #
@@ -322,17 +340,15 @@ def _stable(items: frozenset[_Item] | None) -> list[dict[str, Any]] | None:
 class RequirerAppData(pydantic.BaseModel):
     """The requirer's application databag."""
 
-    model_config = pydantic.ConfigDict(populate_by_name=True)
+    model_config = pydantic.ConfigDict(populate_by_name=True, alias_generator=_hyphenated)
 
     topic_permissions: frozenset[TopicPermission] | None = pydantic.Field(
         default=None,
-        alias='topic-permissions',
         description='The topic filters the requirer wants access to, and the access it wants.',
         title='Topic permissions',
     )
     client_id_prefix: str | None = pydantic.Field(
         default=None,
-        alias='client-id-prefix',
         description=(
             'A prefix the requirer would like reserved for its MQTT client IDs, so that'
             ' several of its units can connect at once without evicting each other.'
@@ -342,7 +358,6 @@ class RequirerAppData(pydantic.BaseModel):
     )
     requested_secrets: frozenset[SecretRequest] | None = pydantic.Field(
         default=None,
-        alias='requested-secrets',
         description=(
             'The provider fields the requirer would like delivered through a Juju secret'
             ' rather than in the databag.'
@@ -351,7 +366,6 @@ class RequirerAppData(pydantic.BaseModel):
     )
     mtls_cert: str | None = pydantic.Field(
         default=None,
-        alias='mtls-cert',
         description=(
             'The requirer`s client certificate, in PEM form, when it authenticates with'
             ' mutual TLS rather than with a password.'
@@ -371,7 +385,7 @@ class RequirerAppData(pydantic.BaseModel):
 class ProviderAppData(pydantic.BaseModel):
     """The provider's application databag."""
 
-    model_config = pydantic.ConfigDict(populate_by_name=True)
+    model_config = pydantic.ConfigDict(populate_by_name=True, alias_generator=_hyphenated)
 
     endpoints: frozenset[Endpoint] | None = pydantic.Field(
         default=None,
@@ -380,7 +394,6 @@ class ProviderAppData(pydantic.BaseModel):
     )
     secret_user: str | None = pydantic.Field(
         default=None,
-        alias='secret-user',
         description=(
             'The URI of a Juju secret, granted to this relation, whose content is the'
             ' username and password to connect with. This is an opaque Juju locator:'
@@ -391,7 +404,6 @@ class ProviderAppData(pydantic.BaseModel):
     )
     granted_permissions: frozenset[TopicPermission] | None = pydantic.Field(
         default=None,
-        alias='granted-permissions',
         description=(
             'The topic permissions actually installed on the broker, which may be'
             ' narrower than those requested.'
@@ -400,14 +412,12 @@ class ProviderAppData(pydantic.BaseModel):
     )
     client_id_prefix: str | None = pydantic.Field(
         default=None,
-        alias='client-id-prefix',
         description='The MQTT client ID prefix actually reserved for the requirer.',
         examples=['telemetry-'],
         title='Client ID prefix',
     )
     tls_ca: str | None = pydantic.Field(
         default=None,
-        alias='tls-ca',
         description=(
             'The certificate authority chain, in PEM form, that signs the broker`s'
             ' certificate. Set whenever any published endpoint has `tls` set.'
@@ -417,7 +427,6 @@ class ProviderAppData(pydantic.BaseModel):
     )
     mqtt_version: str | None = pydantic.Field(
         default=None,
-        alias='mqtt-version',
         description='The highest MQTT protocol version the broker supports.',
         examples=['3.1.1', '5.0'],
         title='MQTT version',
@@ -559,7 +568,7 @@ class MQTTClientJoinedEvent(ops.RelationEvent):
     @property
     def app_name(self) -> str:
         """The name of the requiring application."""
-        return self.relation.app.name if self.relation.app is not None else ''
+        return self.relation.app.name
 
     @property
     def topic_permissions(self) -> frozenset[TopicPermission]:
@@ -793,8 +802,6 @@ class MQTTProvider(ops.Object):
 
     def _get_request(self, relation: ops.Relation) -> ClientRequest | None:
         """Parse one relation's requirer databag into a request."""
-        if relation.app is None:
-            return None
         data = _load(RequirerAppData, relation, relation.app)
         if data is None:
             return None
@@ -978,7 +985,7 @@ class MQTTRequirer(ops.Object):
 
     def _on_secret_changed(self, event: ops.SecretChangedEvent) -> None:
         relation = self._charm.model.get_relation(self._relation_name)
-        if relation is None or relation.app is None:
+        if relation is None:
             return
         data = _load(ProviderAppData, relation, relation.app)
         if data is None or not data.secret_user:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections.abc
 import json
 from typing import Any
 
@@ -86,7 +87,7 @@ LXD = testing.Model(name='testing', type='lxd')
 
 
 @pytest.fixture
-def ctx():
+def ctx() -> collections.abc.Iterator[testing.Context[_Charm]]:
     with testing.Context(_Charm, meta=CHARM_META) as context:
         yield context
 
@@ -102,7 +103,7 @@ def _requirer_databag(**overrides: str) -> dict[str, str]:
     return data
 
 
-def _loaded(databag: dict[str, str], key: str) -> Any:
+def _loaded(databag: collections.abc.Mapping[str, str], key: str) -> Any:
     return json.loads(databag[key])
 
 
@@ -112,7 +113,7 @@ def _loaded(databag: dict[str, str], key: str) -> Any:
 
 
 @pytest.mark.parametrize('event_name', ['relation_created', 'relation_joined'])
-def test_requirer_publishes_request(ctx: testing.Context, event_name: str):
+def test_requirer_publishes_request(ctx: testing.Context[_Charm], event_name: str):
     relation = testing.Relation('upstream', remote_app_name='broker')
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 
@@ -130,7 +131,7 @@ def test_requirer_publishes_request(ctx: testing.Context, event_name: str):
     assert _loaded(databag, 'mtls-cert') is None
 
 
-def test_requirer_does_not_publish_when_not_leader(ctx: testing.Context):
+def test_requirer_does_not_publish_when_not_leader(ctx: testing.Context[_Charm]):
     relation = testing.Relation('upstream', remote_app_name='broker')
     state_in = testing.State(leader=False, model=LXD, relations={relation})
 
@@ -144,7 +145,7 @@ def test_requirer_does_not_publish_when_not_leader(ctx: testing.Context):
 # --------------------------------------------------------------------------------------
 
 
-def test_provider_get_requests(ctx: testing.Context):
+def test_provider_get_requests(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
     )
@@ -170,7 +171,7 @@ def test_provider_get_requests(ctx: testing.Context):
     assert request.mtls_cert is None
 
 
-def test_provider_emits_client_joined(ctx: testing.Context):
+def test_provider_emits_client_joined(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
     )
@@ -189,7 +190,7 @@ def test_provider_emits_client_joined(ctx: testing.Context):
 # --------------------------------------------------------------------------------------
 
 
-def test_provider_publishes_endpoints_and_credentials(ctx: testing.Context):
+def test_provider_publishes_endpoints_and_credentials(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
     )
@@ -218,7 +219,7 @@ def test_provider_publishes_endpoints_and_credentials(ctx: testing.Context):
 
 
 def test_second_reconcile_creates_no_new_revision(
-    ctx: testing.Context, monkeypatch: pytest.MonkeyPatch
+    ctx: testing.Context[_Charm], monkeypatch: pytest.MonkeyPatch
 ):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
@@ -251,7 +252,7 @@ def test_second_reconcile_creates_no_new_revision(
 
 
 def test_changed_password_creates_a_new_revision(
-    ctx: testing.Context, monkeypatch: pytest.MonkeyPatch
+    ctx: testing.Context[_Charm], monkeypatch: pytest.MonkeyPatch
 ):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
@@ -269,7 +270,7 @@ def test_changed_password_creates_a_new_revision(
     assert secret.latest_content == {'username': 'relation-7', 'password': 'a-new-password'}
 
 
-def test_setters_require_leadership(ctx: testing.Context):
+def test_setters_require_leadership(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
     )
@@ -290,7 +291,7 @@ def test_setters_require_leadership(ctx: testing.Context):
         manager.run()
 
 
-def test_relation_broken_removes_the_secret(ctx: testing.Context):
+def test_relation_broken_removes_the_secret(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
     )
@@ -305,7 +306,7 @@ def test_relation_broken_removes_the_secret(ctx: testing.Context):
     assert state_out.secrets == frozenset()
 
 
-def test_secret_remove_drops_the_revision(ctx: testing.Context):
+def test_secret_remove_drops_the_revision(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
     )
@@ -323,7 +324,7 @@ def test_secret_remove_drops_the_revision(ctx: testing.Context):
     assert ctx.removed_secret_revisions == [2]
 
 
-def test_secret_remove_ignores_other_secrets(ctx: testing.Context):
+def test_secret_remove_ignores_other_secrets(ctx: testing.Context[_Charm]):
     secret = testing.Secret({'a': 'b'}, label='something-else', owner='app')
     state_in = testing.State(leader=True, model=LXD, secrets={secret})
 
@@ -352,7 +353,7 @@ def _provider_databag(**overrides: str) -> dict[str, str]:
     return data
 
 
-def test_requirer_reads_the_connection(ctx: testing.Context):
+def test_requirer_reads_the_connection(ctx: testing.Context[_Charm]):
     secret = testing.Secret({'username': 'relation-7', 'password': 'hunter2'})
     relation = testing.Relation(
         'upstream',
@@ -381,7 +382,7 @@ def test_requirer_reads_the_connection(ctx: testing.Context):
     assert next(iter(connection.endpoints)).uri == 'mqtts://10.1.2.3:8883'
 
 
-def test_requirer_connection_is_none_when_nothing_published(ctx: testing.Context):
+def test_requirer_connection_is_none_when_nothing_published(ctx: testing.Context[_Charm]):
     relation = testing.Relation('upstream', remote_app_name='broker')
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 
@@ -390,7 +391,7 @@ def test_requirer_connection_is_none_when_nothing_published(ctx: testing.Context
         assert manager.charm.connection is None
 
 
-def test_requirer_tolerates_an_ungranted_secret(ctx: testing.Context):
+def test_requirer_tolerates_an_ungranted_secret(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'upstream',
         remote_app_name='broker',
@@ -407,7 +408,7 @@ def test_requirer_tolerates_an_ungranted_secret(ctx: testing.Context):
     assert connection.password is None
 
 
-def test_requirer_broker_gone(ctx: testing.Context):
+def test_requirer_broker_gone(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'upstream', remote_app_name='broker', remote_app_data=_provider_databag()
     )
@@ -418,7 +419,7 @@ def test_requirer_broker_gone(ctx: testing.Context):
         assert manager.charm.seen == ['gone']
 
 
-def test_secret_changed_re_emits_broker_available(ctx: testing.Context):
+def test_secret_changed_re_emits_broker_available(ctx: testing.Context[_Charm]):
     secret = testing.Secret({'username': 'relation-7', 'password': 'rotated'})
     relation = testing.Relation(
         'upstream',
@@ -441,7 +442,9 @@ def test_secret_changed_re_emits_broker_available(ctx: testing.Context):
 # --------------------------------------------------------------------------------------
 
 
-def test_provider_publishes_an_error(ctx: testing.Context, monkeypatch: pytest.MonkeyPatch):
+def test_provider_publishes_an_error(
+    ctx: testing.Context[_Charm], monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setitem(BEHAVIOUR, 'error', 'topic filter "#" is not permitted')
     relation = testing.Relation(
         'mqtt', remote_app_name='telemetry', remote_app_data=_requirer_databag()
@@ -459,7 +462,7 @@ def test_provider_publishes_an_error(ctx: testing.Context, monkeypatch: pytest.M
     assert state_out.secrets == frozenset()
 
 
-def test_requirer_surfaces_the_error(ctx: testing.Context):
+def test_requirer_surfaces_the_error(ctx: testing.Context[_Charm]):
     relation = testing.Relation(
         'upstream',
         remote_app_name='broker',
@@ -591,7 +594,9 @@ def test_out_of_range_endpoints_are_dropped():
         {'requested-secrets': '17'},
     ],
 )
-def test_malformed_requirer_databag_does_not_raise(ctx: testing.Context, databag: dict[str, str]):
+def test_malformed_requirer_databag_does_not_raise(
+    ctx: testing.Context[_Charm], databag: dict[str, str]
+):
     relation = testing.Relation('mqtt', remote_app_name='telemetry', remote_app_data=databag)
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 
@@ -610,7 +615,9 @@ def test_malformed_requirer_databag_does_not_raise(ctx: testing.Context, databag
         {'secret-user': 'not json'},
     ],
 )
-def test_malformed_provider_databag_does_not_raise(ctx: testing.Context, databag: dict[str, str]):
+def test_malformed_provider_databag_does_not_raise(
+    ctx: testing.Context[_Charm], databag: dict[str, str]
+):
     relation = testing.Relation('upstream', remote_app_name='broker', remote_app_data=databag)
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 
@@ -678,7 +685,7 @@ FULL_REQUIRER_DATA = mqtt.RequirerAppData(
     ('endpoint', 'model'),
     [('mqtt', FULL_PROVIDER_DATA), ('upstream', FULL_REQUIRER_DATA)],
 )
-def test_every_field_round_trips(ctx: testing.Context, endpoint: str, model: Any):
+def test_every_field_round_trips(ctx: testing.Context[_Charm], endpoint: str, model: Any):
     relation = testing.Relation(endpoint, remote_app_name='peer')
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 
@@ -692,7 +699,7 @@ def test_every_field_round_trips(ctx: testing.Context, endpoint: str, model: Any
     assert loaded == model
 
 
-def test_save_is_stable_across_hooks(ctx: testing.Context):
+def test_save_is_stable_across_hooks(ctx: testing.Context[_Charm]):
     relation = testing.Relation('mqtt', remote_app_name='peer')
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 

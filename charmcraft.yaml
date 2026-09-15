@@ -287,8 +287,9 @@ config:
 
         Directives that would subvert what the charm manages are rejected, and the
         unit goes to blocked rather than applying a config the charm cannot reason
-        about: listener, port, bind_address, allow_anonymous, password_file,
-        acl_file, plugin, per_listener_settings and user.
+        about: acl_file, allow_anonymous, auth_plugin, bind_address, bind_interface,
+        global_plugin, listener, password_file, per_listener_settings, plugin, port
+        and user.
     bridge-topics:
       type: string
       default: ""
