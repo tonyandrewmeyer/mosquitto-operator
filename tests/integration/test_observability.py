@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import time
 
 import helpers
 import jubilant
@@ -46,6 +47,20 @@ def mosquitto_is_ready(status: jubilant.Status) -> bool:
     return jubilant.all_agents_idle(status, APP) and status.apps[APP].is_active
 
 
+def the_collector_has_joined(status: jubilant.Status) -> bool:
+    """Whether the collector subordinate has a unit alongside the broker.
+
+    A subordinate gets its unit only after the integration is made, and the principal
+    does not see `relation-joined` — which is when the charm publishes its scrape jobs,
+    alert rules and dashboards — until that unit exists. Reading the databag before
+    then finds it empty, and the charm is not at fault.
+    """
+    if not mosquitto_is_ready(status):
+        return False
+    units = status.apps[APP].units.get(UNIT)
+    return units is not None and bool(units.subordinates)
+
+
 def metrics(juju: jubilant.Juju) -> str:
     """Scrape the exporter the way the collector does."""
     address = juju.status().apps[APP].units[UNIT].public_address
@@ -63,13 +78,23 @@ def cos_agent_data(juju: jubilant.Juju) -> dict[str, object]:
     The cos_agent library puts everything — scrape jobs, alert rules and dashboards —
     into one JSON blob in the unit databag.
     """
-    info = juju.show_unit(UNIT)
-    for relation in info.relation_info:
-        if relation.endpoint != 'cos-agent':
-            continue
-        assert relation.local_unit is not None
-        return json.loads(relation.local_unit.data['config'])
-    raise AssertionError('no cos-agent relation data on the unit')
+    # The charm publishes on relation-joined, which the principal only sees once the
+    # subordinate's unit exists. `test_deploy` waits for that, but the databag can still
+    # take a moment to settle, so give it a little room rather than failing on a race.
+    deadline = time.monotonic() + 120
+    while True:
+        info = juju.show_unit(UNIT)
+        for relation in info.relation_info:
+            if relation.endpoint != 'cos-agent':
+                continue
+            data = (relation.local_unit.data if relation.local_unit else None) or {}
+            if 'config' in data:
+                return json.loads(data['config'])
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                'the charm published nothing on the cos-agent relation within 120s'
+            )
+        time.sleep(5)
 
 
 @pytest.mark.juju_setup
@@ -78,7 +103,7 @@ def test_deploy(charm: pathlib.Path, juju: jubilant.Juju):
     juju.deploy(charm, app=APP)
     juju.deploy(COLLECTOR, channel=COLLECTOR_CHANNEL)
     juju.integrate(f'{APP}:cos-agent', f'{COLLECTOR}:cos-agent')
-    juju.wait(mosquitto_is_ready, timeout=1200)
+    juju.wait(the_collector_has_joined, timeout=1200)
 
 
 def test_the_exporter_is_running(juju: jubilant.Juju):
