@@ -44,6 +44,10 @@ class MosquittoCharm(ops.CharmBase):
         # blocked with the broker's own complaint rather than the hook failing with a
         # traceback the operator has to go and find in the log.
         self._service_error: str | None = None
+        # Set when something the charm declined or could not do should be visible in
+        # the status rather than only in the log.
+        self._exporter_error: str | None = None
+        self._bridge_error: str | None = None
 
         self._tracing = ops_tracing.Tracing(
             self, 'charm-tracing', ca_relation_name='receive-ca-cert'
@@ -479,7 +483,14 @@ class MosquittoCharm(ops.CharmBase):
             return
 
         self._open_ports(settings, have_tls=material is not None)
-        self._reconcile_exporter(settings, paths, users)
+        try:
+            self._reconcile_exporter(settings, paths, users)
+        except mosquitto.ServiceError as e:
+            # The exporter has nothing to do with serving MQTT, so a broken one must
+            # not error every hook — including update-status — for a broker that is
+            # working perfectly well.
+            self._exporter_error = str(e)
+            logger.error('The metrics exporter would not start: %s', e)
         self._publish_mqtt(settings, material is not None)
 
     def _scale_problem(self) -> str | None:
@@ -578,6 +589,10 @@ class MosquittoCharm(ops.CharmBase):
         if connection is None or not connection.endpoints:
             return None, mosquitto.Change.NONE
         if not mosquitto.supports_bridging(version):
+            self._bridge_error = (
+                f'Mosquitto {version} is vulnerable to CVE-2024-3935 through bridge '
+                f'topic remapping; set install-source=ppa'
+            )
             logger.error(
                 'Refusing to configure a bridge on Mosquitto %s: versions before 2.0.19 '
                 'are vulnerable to CVE-2024-3935 through bridge topic remapping. Set '
@@ -862,6 +877,15 @@ class MosquittoCharm(ops.CharmBase):
             )
             return
 
+        if self._bridge_error is not None:
+            event.add_status(
+                ops.ActiveStatus(f'ready — the bridge is disabled: {self._bridge_error}')
+            )
+        if self._exporter_error is not None:
+            event.add_status(
+                ops.ActiveStatus(f'ready — metrics are not being exported: {self._exporter_error}')
+            )
+
         if settings.allow_anonymous:
             event.add_status(
                 ops.ActiveStatus('ready — anonymous access is enabled, which is not safe')
@@ -1066,7 +1090,11 @@ class MosquittoCharm(ops.CharmBase):
         params = event.load_params(config.CreateBackupParams, errors='fail')
         paths = self._paths()
         destination = pathlib.Path(params.path) if params.path else None
-        path = mosquitto.create_backup(paths, destination)
+        try:
+            path = mosquitto.create_backup(paths, destination)
+        except mosquitto.Error as e:
+            event.fail(f'Could not write the backup: {e}')
+            return
         event.set_results({'path': str(path), 'size': path.stat().st_size})
         event.log(
             'The persistence database is written on autosave, so the copy is a point '
@@ -1080,7 +1108,11 @@ class MosquittoCharm(ops.CharmBase):
         params = event.load_params(config.RestoreBackupParams, errors='fail')
         paths = self._paths()
         event.log('Stopping the broker; every client will be disconnected.')
-        mosquitto.stop(paths)
+        try:
+            mosquitto.stop(paths)
+        except mosquitto.ServiceError as e:
+            event.fail(f'Could not stop Mosquitto to restore: {e}')
+            return
         try:
             mosquitto.restore_backup(paths, pathlib.Path(params.path))
         except mosquitto.Error as e:
@@ -1090,7 +1122,12 @@ class MosquittoCharm(ops.CharmBase):
             event.fail(f'Could not restore {params.path}: {e}')
             return
         finally:
-            mosquitto.start(paths)
+            # Whatever happened, try to get the broker back: a failed restore must not
+            # also leave the service down.
+            try:
+                mosquitto.start(paths)
+            except mosquitto.ServiceError as start_error:
+                logger.error('Mosquitto did not come back after a restore: %s', start_error)
         event.set_results({'restored': params.path})
 
     def _on_force_reconfigure(self, event: ops.ActionEvent) -> None:
@@ -1109,7 +1146,14 @@ class MosquittoCharm(ops.CharmBase):
         """Stop the broker for host maintenance."""
         self._set_paused(paused=True)
         mosquitto.remove_exporter()
-        mosquitto.stop(self._paths())
+        try:
+            # Disabled as well as stopped: a stopped-but-enabled service comes back at
+            # the next reboot, which is exactly the event the operator paused for, and
+            # the charm would go on reporting that it was paused.
+            mosquitto.pause(self._paths())
+        except mosquitto.ServiceError as e:
+            event.fail(f'Could not stop Mosquitto: {e}')
+            return
         event.set_results({'result': 'paused'})
 
     def _on_resume(self, event: ops.ActionEvent) -> None:

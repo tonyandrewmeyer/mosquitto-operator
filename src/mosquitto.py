@@ -15,6 +15,7 @@ import contextlib
 import dataclasses
 import enum
 import grp
+import hashlib
 import logging
 import os
 import pathlib
@@ -597,6 +598,16 @@ def render_acl_file(
     Returns:
         The file contents.
     """
+    for username, permissions in rules.items():
+        for topic, access in permissions:
+            # Belt and braces: the callers validate this, but the ACL file is line
+            # oriented and a topic with a line break in it would silently become extra
+            # rules rather than a broken one.
+            if any(character in f'{username}{topic}{access}' for character in '\n\r\x00'):
+                raise ValueError(
+                    f'refusing to write an ACL entry containing a line break: {username}/{topic}'
+                )
+
     lines = ['# Managed by the mosquitto charm. Do not edit.', '']
     # Rules before the first `user` line apply to anonymous clients. Note that these
     # are the only global grants: `pattern` lines would apply to every user including
@@ -968,6 +979,25 @@ def write_password_file(file_paths: Paths, users: Mapping[str, str]) -> Change:
         Error: If hashing failed.
     """
     plaintext = render_password_file(users)
+    # The hashes are salted, so hashing the same passwords twice gives different files
+    # and the written file can never be compared against the desired one. Keep a digest
+    # of the desired plaintext alongside it instead.
+    #
+    # Comparing usernames is not good enough, and getting that wrong is silent: an
+    # operator changes a password, the username set is unchanged, the charm decides
+    # nothing has happened, and the broker keeps accepting only the old password while
+    # the action reports success and hands over the new one.
+    digest = hashlib.sha256(plaintext.encode()).hexdigest()
+    digest_file = file_paths.password_file.with_suffix(
+        file_paths.password_file.suffix + '.charm-digest'
+    )
+    if file_paths.password_file.exists() and digest_file.exists():
+        try:
+            if digest_file.read_text().strip() == digest:
+                return Change.NONE
+        except OSError:
+            logger.debug('Could not read %s; rewriting the password file.', digest_file)
+
     with tempfile.NamedTemporaryFile(
         'w', dir=file_paths.password_file.parent, prefix='.passwd-', delete=False
     ) as handle:
@@ -977,13 +1007,6 @@ def write_password_file(file_paths: Paths, users: Mapping[str, str]) -> Change:
         temporary.chmod(0o600)
         if users:
             _run([file_paths.passwd_tool, '-U', temporary])
-        hashed = temporary.read_text()
-        old = file_paths.password_file.read_text() if file_paths.password_file.exists() else ''
-        # The hash is salted, so a freshly hashed file never equals the old one even
-        # when nothing changed. Compare the usernames instead, and rely on the
-        # password path elsewhere to decide when a password genuinely changed.
-        if _usernames(old) == _usernames(hashed) and old:
-            return Change.NONE
         # Mosquitto drops to its own user before reading this, and warns (and in
         # future will refuse) if it is not owned by that user or is readable by others.
         _chown(temporary, file_paths.user, file_paths.group, 0o600)
@@ -992,16 +1015,10 @@ def write_password_file(file_paths: Paths, users: Mapping[str, str]) -> Change:
     finally:
         if temporary.exists() and temporary != file_paths.password_file:
             temporary.unlink()
-    return Change.RELOAD
-
-
-def _usernames(password_file_contents: str) -> frozenset[str]:
-    """Extract the usernames from a password file."""
-    return frozenset(
-        line.split(':', 1)[0]
-        for line in password_file_contents.splitlines()
-        if ':' in line and not line.startswith('#')
+    pathops.ensure_contents(
+        digest_file, f'{digest}\n', mode=0o600, user=file_paths.user, group=file_paths.group
     )
+    return Change.RELOAD
 
 
 def write_acl_file(
@@ -1090,7 +1107,12 @@ def write_bridge_ca(file_paths: Paths, ca: str) -> Change:
         user=file_paths.user,
         group=file_paths.group,
     )
-    return Change.RELOAD if changed else Change.NONE
+    # A restart, not a reload: Mosquitto builds a bridge's TLS context when the bridge
+    # connection is established and does not re-read `bridge_cafile` on SIGHUP the way
+    # it re-reads a listener's certificate. Reloading would leave the bridge on the old
+    # authority until it happened to reconnect, and then fail to verify — a bridge that
+    # silently stops carrying traffic.
+    return Change.RESTART if changed else Change.NONE
 
 
 def write_service_overrides(file_paths: Paths, *, file_limit: int) -> bool:
@@ -1369,6 +1391,23 @@ def start(file_paths: Paths) -> None:
         raise ServiceError(f'could not start Mosquitto: {e}') from e
 
 
+def pause(file_paths: Paths) -> None:
+    """Stop the broker and stop it coming back at the next boot.
+
+    `stop` on its own leaves the unit enabled, so a reboot during the host maintenance
+    the operator paused for would start the broker again while the charm went on
+    reporting that it was paused.
+
+    Raises:
+        ServiceError: If the broker would not stop.
+    """
+    stop(file_paths)
+    try:
+        systemd.service_disable(file_paths.service)
+    except systemd.SystemdError as e:
+        raise ServiceError(f'could not disable Mosquitto: {e}') from e
+
+
 def stop(file_paths: Paths) -> None:
     """Stop the broker.
 
@@ -1609,10 +1648,25 @@ def restore_backup(file_paths: Paths, source: pathlib.Path) -> None:
     except OSError as e:
         raise Error(f'could not restore the backup {source}: {e}') from e
 
+    # tarfile's `data` filter deliberately discards ownership, so everything lands
+    # owned by root. Since 2.0 the broker drops to its own user before opening its key
+    # and its persistence database, so without this it cannot read what was restored,
+    # and the next start fails.
     for path in file_paths.managed_files():
         if path.exists():
             _chown(
                 path, file_paths.user, file_paths.group, 0o600 if 'passwd' in path.name else 0o640
+            )
+    database = file_paths.persistence_dir / 'mosquitto.db'
+    if database.exists():
+        _chown(database, file_paths.user, file_paths.group, 0o600)
+    if file_paths.certs_dir.exists():
+        for certificate in file_paths.certs_dir.glob('*'):
+            _chown(
+                certificate,
+                file_paths.user,
+                file_paths.group,
+                0o600 if certificate.suffix == '.key' else 0o644,
             )
     logger.info('Restored %s.', source)
 
@@ -1630,6 +1684,15 @@ def migrate_state(old: Paths, new: Paths) -> None:
     """
     if old == new:
         return
+    # Nothing else stops the previous broker, and the deb and the snap both bind the
+    # same port: leaving the old one enabled means two brokers fighting over 1883, the
+    # new one crash-looping, and a blocked unit with no hint as to why.
+    if is_running(old):
+        logger.info('Stopping the previous Mosquitto (%s) before migrating.', old.service)
+        with contextlib.suppress(ServiceError, systemd.SystemdError):
+            stop(old)
+    with contextlib.suppress(systemd.SystemdError):
+        systemd.service_disable(old.service)
     ensure_directories(new)
     for source, target in (
         (old.password_file, new.password_file),

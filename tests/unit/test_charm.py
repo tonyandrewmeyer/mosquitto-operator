@@ -1709,3 +1709,107 @@ def test_a_configuration_the_broker_rejects_is_not_applied(
         'the last change was not applied — the broker rejected the configuration — '
         'Invalid bridge configuration: no topics defined'
     )
+
+
+def test_changing_an_existing_password_reaches_the_broker(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """The password file must be rewritten when only the password changed.
+
+    The hashes are salted, so the written file can never be compared against the
+    desired one, and comparing usernames instead is silently wrong: the operator is
+    handed a new password the broker does not accept, and the action reports success.
+    """
+    state = make_state()
+    first = ctx.run(
+        ctx.on.action('set-password', params={'username': 'alice', 'password': 'first'}), state
+    )
+    assert fake.users['alice'] == 'first'
+
+    ctx.run(
+        ctx.on.action('set-password', params={'username': 'alice', 'password': 'second'}),
+        first,
+    )
+
+    assert fake.users['alice'] == 'second'
+    assert fake.last_change is not mosquitto.Change.NONE, (
+        'the charm decided a password change needed nothing done'
+    )
+
+
+@pytest.mark.parametrize(
+    'topic',
+    [
+        'a/#\nuser _charm_metrics\ntopic readwrite #',
+        ' $SYS/#',
+        'a\x00b',
+        'a/' + 'b' * 600,
+    ],
+)
+def test_the_grant_action_rejects_topics_that_would_forge_acl_lines(
+    topic: str, fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """The ACL file is line oriented, so a topic with a break in it becomes new rules."""
+    state = make_state()
+    created = ctx.run(ctx.on.action('set-password', params={'username': 'alice'}), state)
+
+    with pytest.raises(testing.ActionFailed):
+        ctx.run(
+            ctx.on.action('grant', params={'username': 'alice', 'topic': topic}),
+            created,
+        )
+
+
+def test_a_client_cannot_forge_acl_lines_over_the_relation(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """The far side of the integration is the thing `_grant_for` exists to distrust."""
+    peer = testing.PeerRelation('mosquitto-peers')
+    hostile = testing.Relation(
+        'mqtt',
+        remote_app_name='telemetry',
+        remote_app_data={
+            'topic-permissions': json.dumps(
+                [{'filter': 'a/#\nuser _charm_metrics\ntopic readwrite #', 'access': 'read'}]
+            )
+        },
+    )
+    state = testing.State(leader=True, relations={peer, hostile}, model=testing.Model(type='lxd'))
+
+    ctx.run(ctx.on.relation_changed(hostile), state)
+
+    for permissions in fake.rules.values():
+        for topic, _ in permissions:
+            assert '\n' not in topic
+
+
+def test_the_exporter_failing_does_not_error_the_hook(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """A broken exporter must not take down a broker that is serving perfectly well."""
+    fake.exporter_start_error = 'could not start the metrics exporter: exit 1'
+    peer = testing.PeerRelation('mosquitto-peers')
+    cos = testing.Relation('cos-agent', remote_app_name='otelcol')
+    state = testing.State(leader=True, relations={peer, cos}, model=testing.Model(type='lxd'))
+
+    out = ctx.run(ctx.on.config_changed(), state)
+
+    assert out.unit_status == testing.ActiveStatus(
+        'ready — metrics are not being exported: could not start the metrics exporter: exit 1'
+    )
+
+
+def test_pause_disables_the_service(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """A stopped-but-enabled broker comes back at the next reboot.
+
+    Which is exactly the event the operator paused for, and the charm would go on
+    reporting that it was paused.
+    """
+    state = ctx.run(ctx.on.start(), make_state())
+
+    ctx.run(ctx.on.action('pause'), state)
+
+    assert fake.running is False
+    assert fake.enabled is False

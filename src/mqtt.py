@@ -181,6 +181,27 @@ class TopicPermission(_Item, frozen=True):
         title='Access',
     )
 
+    @pydantic.field_validator('filter')
+    @classmethod
+    def _check_filter(cls, value: str | None) -> str | None:
+        """Reject filters that could not be written into an ACL file safely.
+
+        The filter is written verbatim into Mosquitto's ACL file, which is line
+        oriented, so a filter carrying a line break would let the far side of the
+        relation append whole `user` blocks and grant itself — or the charm's own
+        reserved users, or anonymous clients — access to anything. Validating here, at
+        the boundary, means nothing downstream has to remember to.
+        """
+        if value is None:
+            return None
+        if value != value.strip():
+            raise ValueError('a topic filter must not have leading or trailing whitespace')
+        if any(character in value for character in '\n\r\x00'):
+            raise ValueError('a topic filter must not contain a line break or a null byte')
+        if len(value) > 512:
+            raise ValueError('a topic filter must be at most 512 characters')
+        return value
+
     def is_usable(self) -> bool:
         """Whether this permission names both a filter and a known access.
 

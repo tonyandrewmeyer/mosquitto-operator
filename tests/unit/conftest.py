@@ -97,6 +97,8 @@ class FakeMosquitto:
         self.root = root
         self.version = version
         self.running = False
+        # Whether systemd would start the broker at boot. `pause` clears it.
+        self.enabled = True
         # What `check_config` reports. None means the broker accepts the configuration.
         self.rejection: str | None = None
         self.calls: list[str] = []
@@ -123,6 +125,7 @@ class FakeMosquitto:
         self.sys_tree: dict[str, str] = {'$SYS/broker/version': 'mosquitto 2.0.18'}
         self.last_health_check: dict[str, Any] = {}
         self.start_error: str | None = None
+        self.exporter_start_error: str | None = None
         self.stop_error: str | None = None
         self.apply_error: str | None = None
         self.journal = ''
@@ -194,7 +197,10 @@ class FakeMosquitto:
         self, file_paths: mosquitto.Paths, users: collections.abc.Mapping[str, str]
     ) -> mosquitto.Change:
         self.calls.append('write_password_file')
-        changed = set(users) != set(self.users)
+        # Compare the whole mapping, not just the usernames: a changed password with an
+        # unchanged username set is a real change, and treating it as nothing is the
+        # bug this fake previously reproduced rather than caught.
+        changed = dict(users) != self.users
         self.users = dict(users)
         return mosquitto.Change.RELOAD if changed else mosquitto.Change.NONE
 
@@ -263,6 +269,7 @@ class FakeMosquitto:
 
     def start(self, file_paths: mosquitto.Paths) -> None:
         self.calls.append('start')
+        self.enabled = True
         if self.start_error is not None:
             raise mosquitto.ServiceError(self.start_error)
         self.running = self.start_works
@@ -272,6 +279,12 @@ class FakeMosquitto:
         if self.stop_error is not None:
             raise mosquitto.ServiceError(self.stop_error)
         self.running = False
+
+    def pause(self, file_paths: mosquitto.Paths) -> None:
+        """Stop the broker and disable it, so a reboot does not bring it back."""
+        self.calls.append('pause')
+        self.stop(file_paths)
+        self.enabled = False
 
     def apply(self, file_paths: mosquitto.Paths, change: mosquitto.Change) -> None:
         self.calls.append('apply')
@@ -309,6 +322,8 @@ class FakeMosquitto:
 
     def start_exporter(self) -> None:
         self.calls.append('start_exporter')
+        if self.exporter_start_error is not None:
+            raise mosquitto.ServiceError(self.exporter_start_error)
         self.exporter.running = True
 
     def remove_exporter(self) -> None:

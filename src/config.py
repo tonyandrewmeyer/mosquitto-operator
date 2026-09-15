@@ -286,6 +286,23 @@ class GrantParams(pydantic.BaseModel):
     topic: str = pydantic.Field(min_length=1)
     access: mqtt.Access = mqtt.Access.READWRITE
 
+    @pydantic.field_validator('topic')
+    @classmethod
+    def _check_topic(cls, value: str) -> str:
+        """Reject topics that could not be written into an ACL file safely.
+
+        The ACL file is line oriented, so a topic carrying a line break would add whole
+        `user` blocks to it. The same rule applies to the `mqtt` integration; see
+        `mqtt.TopicPermission`.
+        """
+        if value != value.strip():
+            raise ValueError('topic must not have leading or trailing whitespace')
+        if any(character in value for character in '\n\r\x00'):
+            raise ValueError('topic must not contain a line break or a null byte')
+        if len(value) > 512:
+            raise ValueError('topic must be at most 512 characters')
+        return value
+
     @pydantic.field_validator('access')
     @classmethod
     def _check_access(cls, value: mqtt.Access) -> mqtt.Access:
