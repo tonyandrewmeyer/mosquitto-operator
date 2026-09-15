@@ -793,6 +793,25 @@ def test_set_password_refuses_a_username_with_a_colon(
     assert 'colon' in excinfo.value.message
 
 
+@pytest.mark.parametrize('password', ['a\nbob:hash', 'a\rb', 'a\x00b'])
+def test_set_password_refuses_a_password_with_a_line_break(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, password: str
+):
+    """The password file is one user per line.
+
+    A password carrying a line break would add lines of its own, and a password file
+    the broker cannot parse breaks authentication for every user, not just this one.
+    """
+    with pytest.raises(testing.ActionFailed) as excinfo:
+        ctx.run(
+            ctx.on.action('set-password', params={'username': 'alice', 'password': password}),
+            make_state(),
+        )
+
+    assert 'line break' in excinfo.value.message
+    assert 'alice' not in fake.users
+
+
 def test_remove_user_needs_a_user(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
@@ -800,6 +819,33 @@ def test_remove_user_needs_a_user(
         ctx.run(ctx.on.action('remove-user', params={'username': 'nobody'}), make_state())
 
     assert excinfo.value.message == 'There is no user called nobody.'
+
+
+def test_remove_user_refuses_a_user_an_integration_owns(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The request is still on the relation, so the next reconcile recreates the user.
+
+    Removing it here would look like it worked and change nothing, with the same
+    password, since that lives in a secret this action does not touch.
+    """
+    relation = testing.Relation(
+        'mqtt',
+        remote_app_name='telemetry',
+        remote_app_data=requirer_databag(('sensors/#', 'read')),
+    )
+    username = f'telemetry-{relation.id}'
+    state_in = make_state(
+        peer=peer_relation({username: {'owner': f'relation:{relation.id}', 'acl': []}}),
+        relations=[relation],
+        secrets=[user_secret(username, 'hunter2')],
+    )
+
+    with pytest.raises(testing.ActionFailed) as excinfo:
+        ctx.run(ctx.on.action('remove-user', params={'username': username}), state_in)
+
+    assert 'juju remove-relation' in excinfo.value.message
+    assert 'removed' not in (ctx.action_results or {})
 
 
 def test_list_users_never_leaks_passwords(
@@ -1072,6 +1118,27 @@ def test_create_backup_at_a_chosen_path(
     assert ctx.action_results is not None
     assert ctx.action_results['path'] == str(destination)
     assert destination.is_file()
+
+
+def test_create_backup_refuses_to_overwrite(
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    tmp_path: pathlib.Path,
+):
+    """The backup is written as root, wherever the action is told to write it.
+
+    An operator who can run actions but not `juju ssh` could otherwise truncate any
+    file on the machine by naming it here.
+    """
+    destination = tmp_path / 'important'
+    destination.write_text('do not lose me')
+
+    with pytest.raises(testing.ActionFailed) as excinfo:
+        ctx.run(ctx.on.action('create-backup', params={'path': str(destination)}), make_state())
+
+    assert 'already exists' in excinfo.value.message
+    assert destination.read_text() == 'do not lose me'
+    assert not fake.backups
 
 
 def test_restore_backup_stops_and_restarts_the_broker(

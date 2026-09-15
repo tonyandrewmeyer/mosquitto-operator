@@ -1727,7 +1727,12 @@ def restore_backup(file_paths: Paths, source: pathlib.Path) -> None:
     for path in file_paths.managed_files():
         if path.exists():
             _chown(
-                path, file_paths.user, file_paths.group, 0o600 if 'passwd' in path.name else 0o640
+                path,
+                file_paths.user,
+                file_paths.group,
+                # The password and ACL files name every user and everything each may
+                # do, and are written 0o600; a restore must not widen that.
+                0o640 if path.name.endswith('.conf') else 0o600,
             )
     database = file_paths.persistence_dir / 'mosquitto.db'
     if database.exists():

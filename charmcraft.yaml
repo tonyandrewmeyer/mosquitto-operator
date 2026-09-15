@@ -386,7 +386,9 @@ actions:
         type: string
         description: |
           Where to write the tarball. Defaults to a timestamped file under
-          /var/lib/mosquitto/backups/.
+          /var/lib/mosquitto/backups/. The file must not already exist: the
+          backup is written as root, so overwriting an arbitrary path is
+          refused.
     additionalProperties: false
   restore-backup:
     description: |

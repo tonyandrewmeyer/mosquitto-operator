@@ -78,7 +78,10 @@ users are not listed.
 juju run mosquitto/0 remove-user username=alice
 ```
 
-That removes the user, all of its topic permissions, and its Juju secret.
+That removes the user, all of its topic permissions, and its Juju secret. It
+only works for users an action created: a user that came from an `mqtt`
+integration is recreated at the next reconciliation, so the action refuses it and
+says to remove the integration instead.
 
 ## Give an application its own credentials
 

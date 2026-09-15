@@ -104,6 +104,15 @@ description of what the charm does rather than a list of changes to it.
 - Notes on an otherwise-active unit are aggregated into one status message. ops
   keeps the first of several equal-priority statuses, so the anonymous-access
   warning could be hidden behind a disabled bridge.
+- `set-password` rejects a password containing a line break. The password file
+  is one user per line, so such a password broke authentication for every user.
+- `remove-user` refuses a user that came from an `mqtt` integration instead of
+  removing it and letting the next reconciliation recreate it.
+- `create-backup` refuses to overwrite an existing file. It writes as root, so
+  an operator who can run actions but not `juju ssh` could truncate any file on
+  the machine by naming it.
+- `restore-backup` puts the password and ACL files back as 0o600, which is how
+  they are written. The ACL file was being widened to 0o640.
 - Changing `bridge-topics` now republishes the request to the upstream broker,
   so the new topics are actually granted. The bridge previously forwarded
   topics the upstream broker had never granted it, and carried no traffic on

@@ -31,7 +31,9 @@ Create an MQTT user, or change an existing user's password. **Leader only.**
 The password is never in the results, because action results are visible to
 anyone who can read the model's operation log. Usernames may not contain a colon
 or a line break, and may not begin with an underscore, which is reserved for the
-charm's own users.
+charm's own users. A supplied password may not contain a line break either: the
+password file is one user per line, and one the broker cannot parse breaks
+authentication for everybody.
 
 ### `remove-user`
 
@@ -46,7 +48,9 @@ Remove an MQTT user, all of its topic permissions, and its Juju secret.
 | --- | --- |
 | `removed` | The user that was removed. |
 
-Fails if there is no such user.
+Fails if there is no such user, and fails for a user that came from an `mqtt`
+integration: the request is still on the relation, so the next reconciliation
+would create it again. Remove the integration instead.
 
 ### `list-users`
 

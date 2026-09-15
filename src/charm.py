@@ -1054,8 +1054,20 @@ class MosquittoCharm(ops.CharmBase):
             return
         params = event.load_params(config.RemoveUserParams, errors='fail')
         users = self._load_users()
-        if params.username not in users:
+        record = users.get(params.username)
+        if record is None:
             event.fail(f'There is no user called {params.username}.')
+            return
+        owner = record.get('owner')
+        if isinstance(owner, str) and owner.startswith('relation:'):
+            # The request that created this user is still on the relation, so the next
+            # reconcile would create it again -- with the same password, since that is
+            # in a secret this action does not touch. Removing the integration is the
+            # only thing that really removes the user.
+            event.fail(
+                f'{params.username} belongs to an integration and would be recreated. '
+                f'Use `juju remove-relation` to remove it.'
+            )
             return
         del users[params.username]
         self._save_users(users)
@@ -1213,6 +1225,16 @@ class MosquittoCharm(ops.CharmBase):
         params = event.load_params(config.CreateBackupParams, errors='fail')
         paths = self._paths()
         destination = pathlib.Path(params.path) if params.path else None
+        if destination is not None and destination.exists():
+            # The backup is written as root, so an operator who can run actions but not
+            # `juju ssh` could otherwise truncate any file on the machine by naming it
+            # here. `restore-backup` validates its path carefully; this is the same
+            # boundary, on the way out.
+            event.fail(
+                f'{destination} already exists. Choose a path that does not, or omit '
+                f'`path` to write a timestamped backup to {paths.backup_dir}.'
+            )
+            return
         try:
             path = mosquitto.create_backup(paths, destination)
         except mosquitto.Error as e:

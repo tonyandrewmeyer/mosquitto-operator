@@ -272,6 +272,22 @@ class SetPasswordParams(pydantic.BaseModel):
             raise ValueError('usernames beginning with an underscore are reserved for the charm')
         return value
 
+    @pydantic.field_validator('password')
+    @classmethod
+    def _check_password(cls, value: str | None) -> str | None:
+        """Reject passwords the password file format cannot represent.
+
+        One user per line, so a password carrying a line break would add lines of its
+        own -- and a password file the broker cannot parse breaks authentication for
+        every user, not just this one. `generate_password` never produces one; this is
+        the path where an operator supplies their own.
+        """
+        if value is None:
+            return None
+        if any(character in value for character in '\n\r\x00'):
+            raise ValueError('password must not contain a line break or a null byte')
+        return value
+
 
 class RemoveUserParams(pydantic.BaseModel):
     """Parameters for the `remove-user` action."""
