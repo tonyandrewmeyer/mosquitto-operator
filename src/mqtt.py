@@ -952,6 +952,18 @@ class MQTTRequirer(ops.Object):
             error=error,
         )
 
+    def sync(self) -> None:
+        """Republish this requirer's request, without waiting for a relation event.
+
+        The request is built from the charm's configuration, which can change at any
+        time, while the relation events that would otherwise republish it are driven by
+        the broker. Call this from the charm's reconcile path so that a `juju config`
+        that changes what the charm wants actually asks for it. It is a no-op when there
+        is no relation, and on a unit that is not the leader.
+        """
+        for relation in self._charm.model.relations[self._relation_name]:
+            self._publish_request(relation)
+
     def _read_credentials(self, uri: str | None) -> tuple[str | None, str | None]:
         """Read the username and password out of the granted secret."""
         if not uri:
@@ -994,8 +1006,7 @@ class MQTTRequirer(ops.Object):
         self._publish_request(event.relation)
 
     def _on_leader_elected(self, event: ops.LeaderElectedEvent) -> None:
-        for relation in self._charm.model.relations[self._relation_name]:
-            self._publish_request(relation)
+        self.sync()
 
     def _on_relation_changed(self, event: ops.RelationChangedEvent) -> None:
         self._publish_request(event.relation)

@@ -1323,6 +1323,30 @@ def test_tls_listeners_appear_once_a_certificate_arrives(
     assert ('tls_version', 'tlsv1.2') in rendered
 
 
+def test_a_certificate_is_requested_on_every_reconcile(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Changing what the certificate should say has to reach the authority.
+
+    The certificates library sends its request from its own relation events only, so
+    without the reconcile calling `sync()` a `juju config certificate-common-name=...`
+    would send no new CSR — and, because no issued certificate would match the new
+    attributes any more, the charm would quietly drop its TLS listeners instead.
+    """
+    relation = testing.Relation('certificates', remote_app_name='ca')
+    state_in = make_state(
+        relations=[relation], config={'certificate-common-name': 'mqtt.example.com'}
+    )
+
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
+
+    requests = json.loads(
+        state_out.get_relation(relation.id).local_unit_data['certificate_signing_requests']
+    )
+    assert len(requests) == 1
+    assert 'BEGIN CERTIFICATE REQUEST' in requests[0]['certificate_signing_request']
+
+
 def test_no_tls_listener_without_a_certificate(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
@@ -1459,14 +1483,14 @@ def test_a_bridge_with_no_topics_says_so(
     assert any('bridge-topics is empty' in line.message for line in ctx.juju_log)
 
 
-def test_the_upstream_request_asks_for_no_topic_permissions(
+def test_the_upstream_request_asks_for_nothing_without_bridge_topics(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
-    """What the edge asks the central broker for, which is currently nothing.
+    """What the edge asks the central broker for, with nothing to forward.
 
-    `src/charm.py` builds its `MQTTRequirer` with `topic_permissions=()`, so the
-    central broker grants the bridge user an empty ACL — and an empty ACL denies every
-    publish. A bridge configured this way connects and then carries nothing.
+    An empty request means the central broker grants the bridge user an empty ACL --
+    and an empty ACL denies every publish. That is the right answer when there is
+    nothing to bridge; see the test below for what happens once there is.
     """
     upstream = testing.Relation('upstream', remote_app_name='central')
 
@@ -1474,6 +1498,44 @@ def test_the_upstream_request_asks_for_no_topic_permissions(
 
     databag = state_out.get_relation(upstream.id).local_app_data
     assert json.loads(databag['topic-permissions']) is None
+
+
+def test_changing_bridge_topics_republishes_the_upstream_request(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """`juju config bridge-topics=...` has to reach the upstream broker's ACL.
+
+    The requirer only republishes on its own relation events, which the upstream broker
+    drives. Without the reconcile calling `sync()`, the local bridge fragment would name
+    topics the upstream broker had never granted, and the bridge would carry nothing on
+    them while looking perfectly healthy.
+    """
+    fake.version = '2.0.19'
+    upstream = testing.Relation(
+        'upstream', remote_app_name='central', remote_app_data=upstream_databag()
+    )
+    state_in = make_state(relations=[upstream], config={'bridge-topics': 'topic sensors/# out'})
+
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
+
+    databag = state_out.get_relation(upstream.id).local_app_data
+    assert json.loads(databag['topic-permissions']) == [{'filter': 'sensors/#', 'access': 'write'}]
+
+
+def test_a_follower_does_not_republish_the_upstream_request(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Only the leader may write the application databag."""
+    upstream = testing.Relation(
+        'upstream', remote_app_name='central', remote_app_data=upstream_databag()
+    )
+    state_in = make_state(
+        leader=False, relations=[upstream], config={'bridge-topics': 'topic sensors/# out'}
+    )
+
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
+
+    assert state_out.get_relation(upstream.id).local_app_data == {}
 
 
 def test_no_bridge_without_an_upstream(

@@ -75,6 +75,17 @@ description of what the charm does rather than a list of changes to it.
 
 ### Fixed
 
+- Changing `certificate-common-name`, `certificate-extra-sans-dns` or
+  `certificate-organization` now sends a new certificate request. The charm
+  previously left the old request in place, so the authority never issued a
+  matching certificate — and because no issued certificate matched the new
+  attributes any more, the TLS listeners disappeared at the next
+  reconfiguration.
+- Changing `bridge-topics` now republishes the request to the upstream broker,
+  so the new topics are actually granted. The bridge previously forwarded
+  topics the upstream broker had never granted it, and carried no traffic on
+  them while appearing healthy.
+
 ### Security
 
 - The `restore-backup` action validates every path in the tarball after

@@ -393,6 +393,15 @@ class MosquittoCharm(ops.CharmBase):
         if settings is None or self._scale_problem() or self._is_paused():
             return
 
+        # Both of these publish a request built from the charm's configuration, and both
+        # libraries only republish on their own relation events. Without these calls a
+        # `juju config` that changes what we ask for is rendered locally and never
+        # reaches the far side: the certificate request would go stale (and the TLS
+        # listeners would quietly disappear with it, since no certificate matches the
+        # new attributes), and the bridge would ask for topics nobody granted.
+        self.certificates.sync()
+        self.upstream.sync()
+
         paths = mosquitto.paths(settings.install_source)
         try:
             version = self._install(settings, paths)
