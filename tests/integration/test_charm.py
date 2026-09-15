@@ -247,8 +247,10 @@ def test_a_second_unit_is_refused(juju: jubilant.Juju):
     deployment. The charm refuses up front instead.
     """
     juju.add_unit(APP)
-    status = juju.wait(jubilant.any_blocked, timeout=600)
+    # Generous, because this waits on a second machine being provisioned and the charm
+    # installed on it, not on the charm deciding anything.
+    status = juju.wait(jubilant.any_blocked, timeout=1800)
     messages = [unit.workload_status.message for unit in status.apps[APP].units.values()]
     assert any('does not cluster' in message for message in messages)
     juju.remove_unit(f'{APP}/1')
-    juju.wait(jubilant.all_active, timeout=600)
+    juju.wait(jubilant.all_active, timeout=900)
