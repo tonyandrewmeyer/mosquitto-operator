@@ -718,6 +718,11 @@ class MosquittoCharm(ops.CharmBase):
         the same, so a unit that was merely blocked at teatime is down by morning. The
         operator's change is refused, loudly, rather than half-applied.
 
+        Only the configuration fragments. The password, ACL and TLS files are written
+        from the charm's own state rather than from anything an operator typed, so a
+        broker that will not serve them is a bug in this charm and not something an
+        operator can roll back out of; the next reconcile writes them again either way.
+
         Args:
             paths: Where Mosquitto's files live.
             snapshot: The fragments as `snapshot_fragments` recorded them.
