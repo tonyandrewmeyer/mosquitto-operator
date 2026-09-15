@@ -1,9 +1,10 @@
 # Copyright 2026 Tony Meyer
 # See LICENSE file for licensing details.
 #
-# Lint, unit tests, charm pack, and Juju integration tests on an LXD machine
-# cloud. Every action is pinned to a full commit SHA with the tag it resolved
-# to in the trailing comment; Dependabot keeps both in step.
+# Lint, unit tests, functional tests against a real broker, charm pack, and Juju
+# integration tests on an LXD machine cloud. Every action is pinned to a full
+# commit SHA with the tag it resolved to in the trailing comment; Dependabot
+# keeps both in step.
 name: CI
 
 on:
@@ -80,6 +81,37 @@ jobs:
           path: coverage.xml
           if-no-files-found: warn
           retention-days: 7
+
+  functional:
+    name: Functional tests
+    # Pinned to the charm's own base: these install Mosquitto from the archive,
+    # so the broker under test should be the one the charm will really meet.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read        # read the repository under test; nothing else
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Set up tox and tox-uv
+        run: uv tool install tox --with tox-uv
+
+      # These are the only tests that exercise src/mosquitto.py against real apt,
+      # real systemd and a real broker, so they need root on a throwaway machine.
+      # A GitHub runner is exactly that. PATH and HOME are preserved so that sudo
+      # finds the tox uv installed for the runner user.
+      - name: Run functional tests
+        run: |
+          sudo --preserve-env=PATH,HOME \
+            env MOSQUITTO_FUNCTIONAL_TESTS=1 \
+            "$(command -v tox)" -e functional
 
   build:
     name: Pack the charm

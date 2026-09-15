@@ -91,7 +91,12 @@ safe to run on a laptop with no controller and no Mosquitto installed.
   and need no Juju controller. `tox -e unit` also writes `coverage.xml`, which
   CI uploads.
 - **Functional tests** exercise the workload-interaction code against a real
-  Mosquitto installation, without Juju in the picture.
+  Mosquitto installation, without Juju in the picture. They install packages and
+  drive systemd, so they need root and only run when
+  `MOSQUITTO_FUNCTIONAL_TESTS=1` is set — do that in a throwaway machine, not on
+  your laptop. CI runs them on every pull request, on a GitHub runner, because
+  they are the only tests that cover `src/mosquitto.py` against real apt and
+  real systemd.
 - **Integration tests** use [Jubilant](https://documentation.ubuntu.com/jubilant/)
   and `pytest-jubilant`, and need a bootstrapped controller.
 
@@ -205,8 +210,8 @@ prek install
 - Keep pull requests focused, and rebase onto `main` rather than merging it in,
   so the history stays linear.
 - Fill in the pull request template, including the checklist.
-- CI (lint, static, unit, pack, and integration against both Juju 3.6 and 4.0)
-  must be green before merge.
+- CI (lint, static, unit, functional, pack, and integration against both Juju
+  3.6 and 4.0) must be green before merge.
 
 ## Licence
 
