@@ -43,7 +43,7 @@ PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n'
 
 SCALE_MESSAGE = (
     'Mosquitto does not cluster, so this charm runs one unit; 2 are deployed. Remove '
-    'the extra units with `juju remove-unit`, and integrate separate Mosquitto '
+    'the extra units with `juju remove-unit --destroy-storage`, and integrate separate Mosquitto '
     'applications on `upstream` if you need more than one broker.'
 )
 

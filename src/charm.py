@@ -552,7 +552,8 @@ class MosquittoCharm(ops.CharmBase):
             return (
                 f'Mosquitto does not cluster, so this charm runs one unit; '
                 f'{len(others) + 1} are deployed. Remove the extra units with '
-                f'`juju remove-unit`, and integrate separate Mosquitto applications on '
+                f'`juju remove-unit --destroy-storage`, and integrate separate Mosquitto '
+                f'applications on '
                 f'`upstream` if you need more than one broker.'
             )
         return None

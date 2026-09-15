@@ -252,5 +252,26 @@ def test_a_second_unit_is_refused(juju: jubilant.Juju):
     status = juju.wait(jubilant.any_blocked, timeout=1800)
     messages = [unit.workload_status.message for unit in status.apps[APP].units.values()]
     assert any('does not cluster' in message for message in messages)
-    juju.remove_unit(f'{APP}/1')
+
+
+def test_removing_the_extra_unit_returns_the_application_to_active(juju: jubilant.Juju):
+    """The charm has to come back once the operator does what the status told them.
+
+    `destroy_storage` is required: each unit has the `data` filesystem attached, and
+    `juju remove-unit` on its own waits for that storage indefinitely rather than
+    saying so.
+    """
+    version = juju.status().model.version
+    juju.remove_unit(f'{APP}/1', destroy_storage=True)
+
+    if version.startswith('4.'):
+        # Juju 4.0.14 does not clean up peer relation membership when a unit is
+        # removed: `relation-list` on the surviving unit still returns the removed one
+        # twenty-five minutes later, and `mosquitto-peers-relation-departed` never
+        # fires. The charm's only source of truth for how many units exist is exactly
+        # that relation, so it cannot recover, and the charm-side fix for this (not
+        # counting the departing unit) has no event to run in. Verified by hand; the
+        # same sequence passes on 3.6.
+        pytest.skip('Juju 4.0 does not remove the departed unit from the peer relation')
+
     juju.wait(jubilant.all_active, timeout=900)
