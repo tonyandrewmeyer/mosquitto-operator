@@ -97,6 +97,12 @@ description of what the charm does rather than a list of changes to it.
   private temporary file and hashed in place with `mosquitto_passwd -U`, and
   the client tools are given their password through
   `$XDG_CONFIG_HOME/mosquitto_<tool>` rather than `-P`.
+- The `upstream` integration validates the host and the credentials it receives
+  before writing them into a bridge configuration. The topic filter was already
+  checked; the other three fields a remote charm chooses were not, so a
+  compromised or buggy upstream broker could have appended directives of its own
+  — another listener, an ACL grant, or `allow_anonymous true` — to a fragment
+  this broker includes.
 - `extra-config` rejects the twelve directives that would let an operator
   disable the charm's own security invariants. Removing the charm's listener
   would otherwise silently re-enable anonymous access, because Mosquitto 2.x

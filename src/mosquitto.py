@@ -479,7 +479,24 @@ def render_bridge_config(bridge: Bridge, file_paths: Paths) -> str:
 
     Returns:
         The contents of the charm's bridge configuration fragment.
+
+    Raises:
+        ValueError: If a value that came from the far side of the relation could not be
+            written out safely.
     """
+    # Belt and braces: `mqtt.Endpoint` and `mqtt.UserSecret` validate these at the
+    # relation boundary, but the host and the credentials are the only values here that
+    # a *remote* charm chooses, and the fragment is a line-oriented file the broker
+    # includes. A line break in any of them would be extra directives rather than a
+    # broken bridge.
+    for what, value in (
+        ('host', bridge.host),
+        ('username', bridge.username),
+        ('password', bridge.password),
+    ):
+        if value is not None and any(character in value for character in '\n\r\x00'):
+            raise ValueError(f'refusing to write a bridge {what} containing a line break')
+
     lines = [
         '# Managed by the mosquitto charm.',
         '',

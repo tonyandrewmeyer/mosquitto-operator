@@ -8,6 +8,7 @@ from typing import Any
 
 import ops
 import ops.testing as testing
+import pydantic
 import pytest
 
 import mqtt
@@ -484,6 +485,84 @@ def test_requirer_surfaces_the_error(ctx: testing.Context[_Charm]):
 # --------------------------------------------------------------------------------------
 # Forward and backward compatibility of the wire format
 # --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        'p\nuser _charm_metrics\ntopic readwrite #\n',
+        'p\rlistener 1884',
+        'p\x00',
+        ' padded ',
+        'x' * 256,
+    ],
+)
+@pytest.mark.parametrize('field', ['username', 'password'])
+def test_unusable_credentials_are_rejected(field: str, value: str):
+    """Credentials come from the provider, and end up in a bridge fragment.
+
+    A line break in either would add directives to the broker's configuration rather
+    than fail a login, which is the same attack `TopicPermission` guards against.
+    """
+    with pytest.raises(pydantic.ValidationError):
+        mqtt.parse_secret_content({field: value})
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['10.1.2.3\nlistener 1884', 'broker\rx', 'broker\x00', ' broker ', 'h' * 256],
+)
+def test_an_unusable_host_is_rejected(value: str):
+    with pytest.raises(pydantic.ValidationError):
+        mqtt.Endpoint.model_validate({'host': value, 'port': 1883})
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['a/#\nuser someone', 'a/#\rx', 'a/#\x00', ' a/# ', 'a' * 513],
+)
+def test_an_unusable_topic_filter_is_rejected(value: str):
+    with pytest.raises(pydantic.ValidationError):
+        mqtt.TopicPermission.model_validate({'filter': value, 'access': 'read'})
+
+
+def test_a_databag_carrying_an_unusable_host_is_ignored(ctx: testing.Context[_Charm]):
+    """One bad value must not error the hook, however it arrived.
+
+    A provider that publishes something the requirer refuses to write out gets the same
+    treatment as one that publishes nonsense: the databag is logged and ignored.
+    """
+    relation = testing.Relation(
+        'upstream',
+        remote_app_name='broker',
+        remote_app_data={
+            'endpoints': json.dumps([{'host': '10.1.2.3\nlistener 1884', 'port': 1883}])
+        },
+    )
+    state_in = testing.State(leader=True, model=LXD, relations={relation})
+
+    with ctx(ctx.on.relation_changed(relation), state_in) as manager:
+        manager.run()
+        assert manager.charm.connection is None
+
+
+def test_unusable_secret_content_is_ignored(ctx: testing.Context[_Charm]):
+    """The same, for content that only appears once the secret is read."""
+    secret = testing.Secret({'username': 'relation-7', 'password': 'p\nlistener 1884'})
+    relation = testing.Relation(
+        'upstream',
+        remote_app_name='broker',
+        remote_app_data=_provider_databag(**{'secret-user': json.dumps(secret.id)}),
+    )
+    state_in = testing.State(leader=True, model=LXD, relations={relation}, secrets={secret})
+
+    with ctx(ctx.on.relation_changed(relation), state_in) as manager:
+        manager.run()
+        connection = manager.charm.connection
+
+    assert connection is not None
+    assert connection.username is None
+    assert connection.password is None
 
 
 def test_empty_databags_parse():

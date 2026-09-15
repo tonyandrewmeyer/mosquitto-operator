@@ -81,6 +81,12 @@ considered compatible with this interface.
   `null`, without erroring.
 - Are expected to emit collections in a stable order, and to ignore order and discard
   duplicates on reception.
+- Are expected to reject, on reception, any `filter`, `host`, `username` or `password`
+  that has leading or trailing whitespace, contains a line break or a null byte, or is
+  longer than its limit (512 characters for a topic filter, 255 for the rest). Both
+  sides write these values into line-oriented configuration, so a line break in one of
+  them is a configuration injection rather than a malformed setting. A databag carrying
+  one is ignored in full, as any unparsable databag is.
 
 ## Relation data
 

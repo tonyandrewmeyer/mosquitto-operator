@@ -485,6 +485,23 @@ def test_render_bridge_config_with_credentials():
     assert rendered['bridge_cafile'] == [str(DEB.certs_dir / 'bridge-ca.crt')]
 
 
+@pytest.mark.parametrize(
+    'field',
+    ['host', 'username', 'password'],
+)
+def test_render_bridge_config_refuses_an_injected_directive(field: str):
+    """The host and the credentials are the values a *remote* charm chooses.
+
+    `mqtt.Endpoint` and `mqtt.UserSecret` reject these at the relation boundary; this is
+    the second line of defence, at the point where they would become directives in a
+    file the broker includes.
+    """
+    injection = 'x\nlistener 1884\nallow_anonymous true'
+
+    with pytest.raises(ValueError, match='line break'):
+        mosquitto.render_bridge_config(bridge(**{field: injection}), DEB)
+
+
 # --- Versions ----------------------------------------------------------------
 
 

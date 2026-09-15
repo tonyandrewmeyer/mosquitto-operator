@@ -161,6 +161,37 @@ class _Item(pydantic.BaseModel, frozen=True):
         raise NotImplementedError
 
 
+def _check_single_line(value: str | None, *, what: str, limit: int = 512) -> str | None:
+    """Reject a value that could not be written into a configuration file safely.
+
+    Everything the far side of a relation sends ends up in a line-oriented file --
+    Mosquitto's ACL file, or the bridge fragment in its configuration directory -- so a
+    value carrying a line break would not be a broken setting but extra directives,
+    written by whoever is on the other end of the relation. Validating here, at the
+    boundary, means nothing downstream has to remember to.
+
+    Args:
+        value: the value to check, or None if the field was absent.
+        what: how to describe the field in the error message.
+        limit: the longest acceptable value.
+
+    Returns:
+        The value, unchanged.
+
+    Raises:
+        ValueError: if the value could not be written out safely.
+    """
+    if value is None:
+        return None
+    if value != value.strip():
+        raise ValueError(f'{what} must not have leading or trailing whitespace')
+    if any(character in value for character in '\n\r\x00'):
+        raise ValueError(f'{what} must not contain a line break or a null byte')
+    if len(value) > limit:
+        raise ValueError(f'{what} must be at most {limit} characters')
+    return value
+
+
 class TopicPermission(_Item, frozen=True):
     """One MQTT topic filter, and the access granted or requested on it."""
 
@@ -189,18 +220,9 @@ class TopicPermission(_Item, frozen=True):
         The filter is written verbatim into Mosquitto's ACL file, which is line
         oriented, so a filter carrying a line break would let the far side of the
         relation append whole `user` blocks and grant itself — or the charm's own
-        reserved users, or anonymous clients — access to anything. Validating here, at
-        the boundary, means nothing downstream has to remember to.
+        reserved users, or anonymous clients — access to anything.
         """
-        if value is None:
-            return None
-        if value != value.strip():
-            raise ValueError('a topic filter must not have leading or trailing whitespace')
-        if any(character in value for character in '\n\r\x00'):
-            raise ValueError('a topic filter must not contain a line break or a null byte')
-        if len(value) > 512:
-            raise ValueError('a topic filter must be at most 512 characters')
-        return value
+        return _check_single_line(value, what='a topic filter')
 
     def is_usable(self) -> bool:
         """Whether this permission names both a filter and a known access.
@@ -238,6 +260,18 @@ class Endpoint(_Item, frozen=True):
         examples=['mqtt', 'websockets'],
         title='Protocol',
     )
+
+    @pydantic.field_validator('host')
+    @classmethod
+    def _check_host(cls, value: str | None) -> str | None:
+        """Reject a host that could not be written into a bridge configuration safely.
+
+        A requirer writes the provider's host into an `address` directive in a
+        configuration fragment Mosquitto includes, so a host carrying a line break would
+        let the provider add directives of its own: another listener, an ACL grant, or
+        `allow_anonymous true`.
+        """
+        return _check_single_line(value, what='a host', limit=255)
 
     def is_usable(self) -> bool:
         """Whether this endpoint names a host and a port in range.
@@ -487,6 +521,18 @@ class UserSecret(pydantic.BaseModel):
         examples=['a-32-character-random-string'],
         title='Password',
     )
+
+    @pydantic.field_validator('username', 'password')
+    @classmethod
+    def _check_credential(cls, value: str | None, info: pydantic.ValidationInfo) -> str | None:
+        """Reject credentials that could not be written out safely.
+
+        These come from a secret the provider writes, and a requirer bridging to that
+        provider writes them into `remote_username` and `remote_password` directives in
+        a configuration fragment. A line break in either would be a configuration
+        injection, not a failed login.
+        """
+        return _check_single_line(value, what=f'a {info.field_name}', limit=255)
 
 
 def secret_content(secret: UserSecret) -> dict[str, str]:
@@ -974,7 +1020,13 @@ class MQTTRequirer(ops.Object):
         except (ops.SecretNotFoundError, ops.ModelError):
             logger.warning('Cannot read the MQTT credentials secret %s yet.', uri)
             return None, None
-        user = parse_secret_content(content)
+        try:
+            user = parse_secret_content(content)
+        except pydantic.ValidationError:
+            # Credentials the charm refuses to write out are no worse than no
+            # credentials at all, and a provider must not be able to error this hook.
+            logger.warning('Ignoring unusable content in the MQTT credentials secret %s.', uri)
+            return None, None
         return user.username, user.password
 
     def _publish_request(self, relation: ops.Relation) -> None:
