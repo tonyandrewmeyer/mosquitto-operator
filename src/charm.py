@@ -52,7 +52,7 @@ class MosquittoCharm(ops.CharmBase):
         self.upstream = mqtt.MQTTRequirer(
             self,
             'upstream',
-            topic_permissions=(),
+            topic_permissions=self._bridge_permissions(),
             client_id_prefix=self.unit.name.replace('/', '-'),
         )
         self.certificates = tls_certificates.TLSCertificatesRequiresV4(
@@ -137,6 +137,45 @@ class MosquittoCharm(ops.CharmBase):
         """Where Mosquitto's files live, for the configured install source."""
         settings = self._config
         return mosquitto.paths(settings.install_source if settings else 'archive')
+
+    def _bridge_permissions(self) -> tuple[mqtt.TopicPermission, ...]:
+        """What to ask the upstream broker for, derived from `bridge-topics`.
+
+        Without this the bridge asks for nothing, is granted nothing, and silently
+        carries no traffic — the failure looks exactly like a working bridge with no
+        messages on it.
+        """
+        settings = self._config
+        if settings is None:
+            return ()
+        access_for = {
+            'out': mqtt.Access.WRITE,
+            'in': mqtt.Access.READ,
+            'both': mqtt.Access.READWRITE,
+        }
+        permissions: dict[str, mqtt.Access] = {}
+        for line in settings.bridge_topics.splitlines():
+            parts = line.split()
+            if len(parts) < 2 or parts[0] != 'topic':
+                continue
+            pattern = parts[1]
+            # Mosquitto's own default direction for a bridge topic is `out`.
+            direction = parts[2] if len(parts) > 2 else 'out'
+            access = access_for.get(direction, mqtt.Access.READWRITE)
+            # A remote prefix changes the topic the remote actually sees, so ask for
+            # that form too rather than only the local one.
+            remote_prefix = parts[4] if len(parts) > 4 else ''
+            for topic in {pattern, f'{remote_prefix}{pattern}' if remote_prefix else pattern}:
+                existing = permissions.get(topic)
+                permissions[topic] = (
+                    mqtt.Access.READWRITE
+                    if existing is not None and existing is not access
+                    else access
+                )
+        return tuple(
+            mqtt.TopicPermission(filter=topic, access=access)
+            for topic, access in sorted(permissions.items())
+        )
 
     def _certificate_requests(self) -> list[tls_certificates.CertificateRequestAttributes]:
         """What to ask the certificate authority for.
@@ -336,6 +375,11 @@ class MosquittoCharm(ops.CharmBase):
             self.unit.status = ops.MaintenanceStatus('changing install source')
             mosquitto.install(settings.install_source, settings.package_channel)
             mosquitto.migrate_state(mosquitto.paths(previous), paths)
+            # Mosquitto 2.1 hashes passwords with argon2id, which 2.0 cannot read, so a
+            # password file carried across a version change may be unusable. The charm
+            # holds every password in a Juju secret, so the cheapest correct thing is to
+            # throw the file away and let the reconcile below write a fresh one.
+            paths.password_file.unlink(missing_ok=True)
         self._remember_install_source(settings.install_source)
 
         version = mosquitto.get_version(settings.install_source)
@@ -459,6 +503,12 @@ class MosquittoCharm(ops.CharmBase):
         # `#` does not match `$SYS`, so the monitoring grant has to name it.
         rules[mosquitto.METRICS_USER] = [('$SYS/#', mosquitto.Access.READ)]
 
+        # Clients on the `mqtt` integration get a user each. This has to happen here,
+        # before the password and ACL files are written: doing it while publishing --
+        # which is after -- would hand a client credentials the broker does not yet know
+        # about, and nothing would re-run until update-status minutes later.
+        self._sync_relation_users()
+
         for username, record in self._load_users().items():
             users[username] = self._password_for(username)
             acl = record.get('acl')
@@ -467,6 +517,32 @@ class MosquittoCharm(ops.CharmBase):
                 for topic, access in (acl if isinstance(acl, list) else [])
             ]
         return users, rules
+
+    def _sync_relation_users(self) -> dict[int, tuple[str, list[tuple[str, str]]]]:
+        """Give every related client a user, and record what it is allowed to do.
+
+        Returns:
+            The username and granted permissions for each related client, keyed by
+            relation id, so that publishing does not have to work it out again.
+        """
+        granted_by_relation: dict[int, tuple[str, list[tuple[str, str]]]] = {}
+        users = self._load_users()
+        changed = False
+        for relation_id, request in self.mqtt.get_requests().items():
+            relation = self.model.get_relation('mqtt', relation_id)
+            if relation is None or relation.app is None:
+                continue
+            username = f'{relation.app.name}-{relation_id}'
+            granted = self._grant_for(request.topic_permissions)
+            granted_by_relation[relation_id] = (username, granted)
+            acl = [[topic, access] for topic, access in granted]
+            record = users.get(username)
+            if record is None or record.get('acl') != acl:
+                users[username] = {'owner': f'relation:{relation_id}', 'acl': acl}
+                changed = True
+        if changed and self.unit.is_leader():
+            self._save_users(users)
+        return granted_by_relation
 
     def _tls_material(self) -> mosquitto.TLSMaterial | None:
         """The certificate, key and authority chain, once the authority has issued."""
@@ -616,19 +692,13 @@ class MosquittoCharm(ops.CharmBase):
         if material is not None:
             ca = material.ca
 
-        users = self._load_users()
-        changed = False
-        for relation_id, request in self.mqtt.get_requests().items():
+        # The users themselves were created during reconciliation, before the password
+        # and ACL files were written, so by the time a client reads these credentials
+        # the broker already accepts them.
+        for relation_id, (username, granted) in self._sync_relation_users().items():
             relation = self.model.get_relation('mqtt', relation_id)
-            if relation is None or relation.app is None:
+            if relation is None:
                 continue
-            username = f'{relation.app.name}-{relation_id}'
-            granted = self._grant_for(request.topic_permissions)
-            record = users.get(username)
-            acl = [[topic, access] for topic, access in granted]
-            if record is None or record.get('acl') != acl:
-                users[username] = {'owner': f'relation:{relation_id}', 'acl': acl}
-                changed = True
             password = self._password_for(username)
             self.mqtt.publish_endpoints(relation, endpoints, tls_ca=ca, mqtt_version='5.0')
             self.mqtt.set_credentials(relation, username, password)
@@ -639,8 +709,6 @@ class MosquittoCharm(ops.CharmBase):
                     for topic, access in granted
                 ],
             )
-        if changed:
-            self._save_users(users)
 
     def _grant_for(self, requested: Sequence[mqtt.TopicPermission]) -> list[tuple[str, str]]:
         """Decide what a client actually gets, given what it asked for.
@@ -751,9 +819,7 @@ class MosquittoCharm(ops.CharmBase):
         event.set_results(
             {
                 'username': params.username,
-                'secret-id': self.model.get_secret(
-                    label=SECRET_LABEL.format(username=params.username)
-                ).id,
+                'secret-id': self._secret_id(params.username) or '',
                 'generated': 'true' if params.password is None else 'false',
             }
         )
@@ -934,6 +1000,12 @@ class MosquittoCharm(ops.CharmBase):
         mosquitto.stop(paths)
         try:
             mosquitto.restore_backup(paths, pathlib.Path(params.path))
+        except mosquitto.Error as e:
+            # A typo in the path, or a tarball that is not one of ours, is an operator
+            # mistake: fail the action rather than putting the unit into error, which
+            # would need `juju resolve` to get out of.
+            event.fail(f'Could not restore {params.path}: {e}')
+            return
         finally:
             mosquitto.start(paths)
         event.set_results({'restored': params.path})

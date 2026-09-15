@@ -676,12 +676,33 @@ def install(install_source: str, channel: str = 'latest/stable') -> None:
     try:
         if install_source == 'ppa':
             _run(['/usr/bin/add-apt-repository', '--yes', '--no-update', PPA])
+        else:
+            _remove_ppa()
         apt.update()
         # The client tools are a separate package, and the charm needs them for health
         # checks and for reading the $SYS tree.
-        apt.add_package([SERVER_PACKAGE, CLIENT_PACKAGE])
+        #
+        # Install the *candidate* version rather than calling `add_package`, which is a
+        # no-op once the package is present at any version. Without this, switching
+        # install-source from the archive to the PPA leaves 2.0.18 in place and quietly
+        # does nothing.
+        for package in (SERVER_PACKAGE, CLIENT_PACKAGE):
+            candidate = apt.DebianPackage.from_apt_cache(package)
+            candidate.ensure(apt.PackageState.Present)
     except (apt.Error, Error) as e:
         raise InstallError(f'could not install Mosquitto from the {install_source}: {e}') from e
+
+
+def _remove_ppa() -> None:
+    """Drop the upstream PPA, so that moving back to the archive really moves back.
+
+    While the PPA is still configured its 2.1.x build remains the candidate, and the
+    charm would keep 2.1 installed while reporting that it is using the archive.
+    """
+    for pattern in ('mosquitto-dev-ubuntu-mosquitto-ppa-*.list', 'mosquitto-dev-*.sources'):
+        for path in pathlib.Path('/etc/apt/sources.list.d').glob(pattern):
+            logger.info('Removing the Mosquitto PPA source %s.', path)
+            path.unlink()
 
 
 def uninstall(install_source: str) -> None:
@@ -1517,7 +1538,13 @@ def restore_backup(file_paths: Paths, source: pathlib.Path) -> None:
         with tarfile.open(source, 'r:gz') as archive:
             members = archive.getmembers()
             for member in members:
-                target = pathlib.Path('/') / member.name
+                # `pathlib` does not normalise `..`, so `etc/mosquitto/../../tmp/x` is
+                # "relative to" /etc/mosquitto and would pass a naive containment check
+                # — an arbitrary file write as root, from a path an operator supplies to
+                # the restore-backup action. tarfile's `data` filter does not help here
+                # either, because extracting to `/` makes its own containment check
+                # vacuous. Normalise first, and compare the normalised path.
+                target = pathlib.Path(os.path.normpath(pathlib.Path('/') / member.name))
                 # A tarball is attacker-controlled input as far as this charm is
                 # concerned: refuse anything that would write outside the broker's own
                 # directories, whether by absolute path, `..`, or a symlink.

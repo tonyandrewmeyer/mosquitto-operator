@@ -629,7 +629,7 @@ def _load[ModelT: pydantic.BaseModel](
         return relation.load(model, source)
     except (ValueError, TypeError):
         logger.warning(
-            'Ignoring unparseable %s databag on relation %s:%d.',
+            'Ignoring unparsable %s databag on relation %s:%d.',
             source.name,
             relation.name,
             relation.id,
@@ -666,7 +666,7 @@ class MQTTProvider(ops.Object):
 
         Returns:
             A mapping of relation id to the request on that relation. Relations whose
-            databag is empty or unparseable are omitted, so the broker simply does not
+            databag is empty or unparsable are omitted, so the broker simply does not
             reconcile them.
         """
         requests: dict[int, ClientRequest] = {}
