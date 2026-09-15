@@ -132,3 +132,19 @@ def wait_for_config(juju: jubilant.Juju, unit: str, expected: str, *, timeout: f
         time.sleep(5)
     assert expected in config, f'{expected!r} never appeared in the charm config:\n{config}'
     return config
+
+
+def wait_for_service(
+    juju: jubilant.Juju, unit: str, service: str, *, running: bool = True, timeout: float = 180
+) -> bool:
+    """Wait for a systemd service to reach a state.
+
+    Asserting on `systemctl is-active` immediately after the hook that started a
+    service races systemd: the hook returns once it has asked for the start, not once
+    the service is up.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if service_is_running(juju, unit, service) is running or time.monotonic() > deadline:
+            return service_is_running(juju, unit, service)
+        time.sleep(5)

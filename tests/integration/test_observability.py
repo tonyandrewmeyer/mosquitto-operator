@@ -114,7 +114,7 @@ def test_deploy(charm: pathlib.Path, juju: jubilant.Juju):
 
 def test_the_exporter_is_running(juju: jubilant.Juju):
     """It only runs when something is collecting, which is now the case."""
-    assert helpers.service_is_running(juju, UNIT, EXPORTER_SERVICE)
+    assert helpers.wait_for_service(juju, UNIT, EXPORTER_SERVICE)
 
 
 def test_the_metrics_endpoint_serves_the_metrics_the_alerts_use(juju: jubilant.Juju):
@@ -175,18 +175,18 @@ def test_turning_off_sys_stops_the_exporter(juju: jubilant.Juju):
     juju.config(APP, {'sys-interval': 0})
     juju.wait(mosquitto_is_ready, timeout=600)
 
-    assert not helpers.service_is_running(juju, UNIT, EXPORTER_SERVICE)
+    assert not helpers.wait_for_service(juju, UNIT, EXPORTER_SERVICE, running=False)
 
     juju.config(APP, {'sys-interval': 10})
     juju.wait(mosquitto_is_ready, timeout=600)
-    assert helpers.service_is_running(juju, UNIT, EXPORTER_SERVICE)
+    assert helpers.wait_for_service(juju, UNIT, EXPORTER_SERVICE)
 
 
 def test_removing_the_integration_removes_the_exporter(juju: jubilant.Juju):
     juju.remove_relation(f'{APP}:cos-agent', f'{COLLECTOR}:cos-agent')
     juju.wait(mosquitto_is_ready, timeout=900)
 
-    assert not helpers.service_is_running(juju, UNIT, EXPORTER_SERVICE)
+    assert not helpers.wait_for_service(juju, UNIT, EXPORTER_SERVICE, running=False)
     unit_file = helpers.exec_allowed_to_fail(
         juju, UNIT, f'/usr/bin/test -f /etc/systemd/system/{EXPORTER_SERVICE}.service'
     )
