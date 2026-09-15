@@ -124,6 +124,9 @@ def test_removing_the_authority_degrades_gracefully(juju: jubilant.Juju):
     this case closes the listener rather than wedging the whole broker.
     """
     juju.remove_relation(f'{APP}:certificates', CA)
+    # `remove-relation` returns before the relation is gone, and on Juju 4.0 the gap is
+    # long enough that the next test's re-integration fails with "already exists".
+    helpers.wait_for_no_relation(juju, APP, 'certificates')
     juju.wait(jubilant.all_active, timeout=600)
 
     assert helpers.service_is_running(juju, UNIT)

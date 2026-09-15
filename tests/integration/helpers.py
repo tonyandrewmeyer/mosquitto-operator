@@ -148,3 +148,22 @@ def wait_for_service(
         if service_is_running(juju, unit, service) is running or time.monotonic() > deadline:
             return service_is_running(juju, unit, service)
         time.sleep(5)
+
+
+def wait_for_no_relation(
+    juju: jubilant.Juju, app: str, endpoint: str, *, timeout: float = 300
+) -> None:
+    """Wait until an application has no integration on an endpoint.
+
+    `juju remove-relation` returns before the relation is gone, and on Juju 4.0 the gap
+    is long enough that re-integrating immediately afterwards fails with "already
+    exists".
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        relations = juju.status().apps[app].relations
+        if endpoint not in relations or not relations[endpoint]:
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError(f'{app}:{endpoint} was still integrated after {timeout}s')
+        time.sleep(5)
