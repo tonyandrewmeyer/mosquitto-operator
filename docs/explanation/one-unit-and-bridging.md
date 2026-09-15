@@ -84,8 +84,11 @@ fires. The peer relation is the only way a charm can ask how many units exist, s
 there is nothing for it to act on. Juju 3.6 cleans up correctly and the unit returns
 to active by itself.
 
-If you hit this on 4.0, `juju resolve` will not help either — the status is accurate
+If you hit this on 4.x, `juju resolve` will not help either — the status is accurate
 about what the charm can see. Removing and redeploying the application is the way out.
+
+A minimal reproducer, with results for 3.6.28, 4.0.14, 4.1-beta3 and 4.2-beta1, is in
+[contrib/juju-peer-departed-reproducer](../../contrib/juju-peer-departed-reproducer/README.md).
 
 ## Related
 
