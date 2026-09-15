@@ -65,6 +65,28 @@ active/passive failover, with shared storage or a virtual IP and a standby that
 keeps the service stopped. That is a plausible future addition; it is not here
 now.
 
+## Removing an extra unit
+
+If you do add a second unit, both go to blocked and the message tells you to remove
+the extra one. Two things about that are worth knowing.
+
+Each unit has the `data` storage attached, so plain `juju remove-unit mosquitto/1`
+waits on that storage indefinitely rather than telling you why. Use:
+
+```
+juju remove-unit mosquitto/1 --destroy-storage
+```
+
+And on **Juju 4.0.14** the surviving unit stays blocked afterwards. That is not the
+charm: verified by hand, `relation-list` on the surviving unit still returns the
+removed unit twenty-five minutes later, and the peer `relation-departed` event never
+fires. The peer relation is the only way a charm can ask how many units exist, so
+there is nothing for it to act on. Juju 3.6 cleans up correctly and the unit returns
+to active by itself.
+
+If you hit this on 4.0, `juju resolve` will not help either — the status is accurate
+about what the charm can see. Removing and redeploying the application is the way out.
+
 ## Related
 
 - [Bridge two brokers](../how-to/bridge-two-brokers.md)
