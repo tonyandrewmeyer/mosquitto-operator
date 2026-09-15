@@ -265,14 +265,14 @@ def test_removing_the_extra_unit_returns_the_application_to_active(juju: jubilan
     juju.remove_unit(f'{APP}/1', destroy_storage=True)
 
     if version.startswith('4.'):
-        # Juju 4.x does not clean up peer relation membership when a unit is removed:
-        # `relation-list` on the surviving unit still returns the removed one
+        # Juju 4.x does not clean up *peer* relation membership when a unit is
+        # removed: `relation-list` on the surviving unit still returns the removed one
         # twenty-five minutes later, and `mosquitto-peers-relation-departed` never
-        # fires. The charm's only source of truth for how many units exist is exactly
-        # that relation, so it cannot recover, and the charm-side fix for this (not
-        # counting the departing unit) has no event to run in. Reproduced on 4.0.14,
-        # 4.1-beta3 and 4.2-beta1, and correct on 3.6.28 — see
-        # contrib/juju-peer-departed-reproducer/.
+        # fires. Ordinary relations are unaffected on the same versions. The charm's
+        # only source of truth for how many units exist is exactly that peer relation,
+        # so it cannot recover, and the charm-side fix for this (not counting the
+        # departing unit) has no event to run in. Reproduced on 4.0.14, 4.1-beta3 and
+        # 4.2-beta1, correct on 3.6.28 — see contrib/juju-peer-departed-reproducer/.
         pytest.skip('Juju 4.0 does not remove the departed unit from the peer relation')
 
     juju.wait(jubilant.all_active, timeout=900)

@@ -77,12 +77,13 @@ waits on that storage indefinitely rather than telling you why. Use:
 juju remove-unit mosquitto/1 --destroy-storage
 ```
 
-And on **Juju 4.0.14** the surviving unit stays blocked afterwards. That is not the
-charm: verified by hand, `relation-list` on the surviving unit still returns the
-removed unit twenty-five minutes later, and the peer `relation-departed` event never
-fires. The peer relation is the only way a charm can ask how many units exist, so
-there is nothing for it to act on. Juju 3.6 cleans up correctly and the unit returns
-to active by itself.
+And on **Juju 4.x** the surviving unit stays blocked afterwards. That is not the
+charm: verified by hand on 4.0.14, 4.1-beta3 and 4.2-beta1, `relation-list` on the
+surviving unit still returns the removed unit twenty-five minutes later, and the peer
+`relation-departed` event never fires. It is specific to peer relations — an ordinary
+relation drops the removed unit correctly on the same versions — and the peer relation
+is the only way a charm can ask how many units exist, so there is nothing for it to
+act on. Juju 3.6 cleans up correctly and the unit returns to active by itself.
 
 If you hit this on 4.x, `juju resolve` will not help either — the status is accurate
 about what the charm can see. Removing and redeploying the application is the way out.

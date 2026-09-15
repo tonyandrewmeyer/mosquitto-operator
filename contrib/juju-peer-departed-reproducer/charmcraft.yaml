@@ -23,3 +23,14 @@ parts:
 peers:
   peers:
     interface: peertest
+
+# So the same charm can be deployed twice and integrated with itself, covering an
+# ordinary provides/requires relation as well as the peer one.
+provides:
+  regular:
+    interface: peertest-regular
+
+requires:
+  regular-req:
+    interface: peertest-regular
+    optional: true
