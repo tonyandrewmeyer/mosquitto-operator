@@ -10,7 +10,9 @@ apt, systemd or a real broker is covered by the functional tests instead.
 
 from __future__ import annotations
 
+import inspect
 import pathlib
+import subprocess
 
 import pytest
 
@@ -544,3 +546,28 @@ def test_managed_files_are_all_under_the_layout():
         assert path.is_absolute()
     for path in SNAP.managed_files():
         assert path.is_relative_to('/var/snap/mosquitto/common')
+
+
+def test_a_timed_out_command_becomes_a_module_error(monkeypatch: pytest.MonkeyPatch):
+    """Every caller handles this module's own error; none handles TimeoutExpired.
+
+    Reaching Launchpad or the archive is not something the charm can promise, and a
+    slow mirror that raised out of `subprocess` ended the hook in a traceback and left
+    the unit needing `juju resolve`.
+    """
+
+    def timeout(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd=['/bin/true'], timeout=60)
+
+    monkeypatch.setattr(mosquitto.subprocess, 'run', timeout)
+
+    with pytest.raises(mosquitto.Error, match='did not finish within'):
+        mosquitto._run(['/bin/true'])
+
+
+def test_adding_the_ppa_is_given_longer_than_the_default():
+    """`add-apt-repository` reaches Launchpad, which regularly takes over a minute."""
+    source = inspect.getsource(mosquitto.install)
+    assert 'add-apt-repository' in source
+    line = next(line for line in source.splitlines() if 'add-apt-repository' in line)
+    assert 'timeout=' in line, 'adding the PPA runs with the default 60s timeout'

@@ -649,14 +649,23 @@ def _run(
     Never invoked through a shell, and always with an absolute path, so that neither
     the operator's environment nor a topic name can change which program runs.
     """
-    result = subprocess.run(
-        [str(part) for part in command],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-        env=dict(env) if env is not None else None,
-    )
+    try:
+        result = subprocess.run(
+            [str(part) for part in command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=dict(env) if env is not None else None,
+        )
+    except subprocess.TimeoutExpired as e:
+        # Raised as this module's own error so that callers which already handle
+        # `Error` — every install path in particular — report it rather than ending the
+        # hook in a traceback. Reaching Launchpad or the archive is not something the
+        # charm can promise, and a slow mirror should not need `juju resolve`.
+        raise Error(
+            f'{pathlib.Path(str(command[0])).name} did not finish within {timeout}s'
+        ) from e
     for line in result.stderr.splitlines():
         logger.debug('%s: %s', pathlib.Path(str(command[0])).name, line)
     if check and result.returncode:
@@ -690,7 +699,8 @@ def install(install_source: str, channel: str = 'latest/stable') -> None:
 
     try:
         if install_source == 'ppa':
-            _run(['/usr/bin/add-apt-repository', '--yes', '--no-update', PPA])
+            # Talks to Launchpad, which is regularly slower than the default.
+            _run(['/usr/bin/add-apt-repository', '--yes', '--no-update', PPA], timeout=300)
         else:
             _remove_ppa()
         apt.update()
