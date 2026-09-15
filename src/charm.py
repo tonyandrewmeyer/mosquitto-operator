@@ -945,10 +945,19 @@ class MosquittoCharm(ops.CharmBase):
             event.add_status(
                 ops.ActiveStatus('ready — the bridge forwards nothing until bridge-topics is set')
             )
-        elif settings.tls_wanted and not self.model.get_relation('certificates'):
-            event.add_status(
-                ops.ActiveStatus('ready — integrate a certificate authority to enable TLS')
-            )
+        elif settings.tls_wanted and self._tls_material() is None:
+            # Key this off the certificate, not off the integration: relating a
+            # certificate authority does not make TLS work, the authority issuing does,
+            # and there is a gap of several hooks in between. Saying "ready" in that gap
+            # tells the operator TLS is up when the listener is not open yet.
+            if self.model.get_relation('certificates'):
+                event.add_status(
+                    ops.ActiveStatus('ready — waiting for a certificate to enable TLS')
+                )
+            else:
+                event.add_status(
+                    ops.ActiveStatus('ready — integrate a certificate authority to enable TLS')
+                )
         else:
             event.add_status(ops.ActiveStatus())
 

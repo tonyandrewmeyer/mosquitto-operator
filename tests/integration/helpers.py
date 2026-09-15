@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import secrets
 import shlex
+import time
 
 import jubilant
 
@@ -113,3 +114,21 @@ def exec_allowed_to_fail(
         # without saying anything about the thing being checked.
         logger.info('Timed out running %s on %s; treating it as a failure.', command, unit)
         return None
+
+
+def wait_for_config(juju: jubilant.Juju, unit: str, expected: str, *, timeout: float = 300) -> str:
+    """Wait for the charm's rendered configuration to contain something.
+
+    Some things the charm writes depend on another application doing its work first —
+    a certificate authority issuing, most obviously — so the configuration lands a few
+    hooks after the integration is made.
+    """
+    deadline = time.monotonic() + timeout
+    config = ''
+    while True:
+        config = read_charm_config(juju, unit)
+        if expected in config or time.monotonic() > deadline:
+            break
+        time.sleep(5)
+    assert expected in config, f'{expected!r} never appeared in the charm config:\n{config}'
+    return config

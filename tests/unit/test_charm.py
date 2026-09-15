@@ -1887,3 +1887,24 @@ def test_removing_the_extra_unit_returns_the_charm_to_active(
     assert out.unit_status == testing.ActiveStatus(
         'ready — integrate a certificate authority to enable TLS'
     )
+
+
+def test_status_while_waiting_for_a_certificate(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """Relating a certificate authority is not the same as it having issued.
+
+    There are several hooks between the two, and saying "ready" in that gap tells the
+    operator TLS is up while the listener is not open yet.
+    """
+    peer = testing.PeerRelation('mosquitto-peers')
+    certificates = testing.Relation('certificates', remote_app_name='ca')
+    state = testing.State(
+        leader=True, relations={peer, certificates}, model=testing.Model(type='lxd')
+    )
+
+    out = ctx.run(ctx.on.config_changed(), state)
+
+    assert out.unit_status == testing.ActiveStatus(
+        'ready — waiting for a certificate to enable TLS'
+    )

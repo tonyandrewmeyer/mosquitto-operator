@@ -73,7 +73,9 @@ def test_the_key_is_readable_by_the_mosquitto_user(juju: jubilant.Juju):
 
 def test_the_tls_listener_really_serves(juju: jubilant.Juju):
     """A round trip over 8883, not merely a line in the configuration file."""
-    assert 'listener 8883' in helpers.read_charm_config(juju, UNIT)
+    # Relating the authority is not the same as it having issued: wait for the
+    # listener the certificate enables, not merely for the integration to exist.
+    helpers.wait_for_config(juju, UNIT, 'listener 8883')
     assert helpers.round_trip(
         juju,
         UNIT,
@@ -137,7 +139,9 @@ def test_reintegrating_brings_tls_back(juju: jubilant.Juju):
     juju.integrate(f'{APP}:certificates', CA)
     juju.wait(jubilant.all_active, timeout=900)
 
-    assert 'listener 8883' in helpers.read_charm_config(juju, UNIT)
+    # Relating the authority is not the same as it having issued: wait for the
+    # listener the certificate enables, not merely for the integration to exist.
+    helpers.wait_for_config(juju, UNIT, 'listener 8883')
     assert helpers.round_trip(
         juju,
         UNIT,
