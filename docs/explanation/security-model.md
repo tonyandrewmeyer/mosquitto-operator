@@ -39,7 +39,9 @@ charm uses two of them:
 
 - `user <name>` followed by `topic <access> <filter>` lines, which is how every
   grant is written;
-- rules before the first `user` line, which apply to anonymous clients.
+- rules before the first `user` line, which apply to anonymous clients. The charm
+  writes none of these, so `allow-anonymous=true` permits a connection and
+  nothing else.
 
 It does **not** emit `pattern` lines. A `pattern` rule applies globally, to every
 user, even when it appears inside a `user` block — which is almost never what
@@ -134,8 +136,9 @@ snap's strict confinement does the same job.
   reaching the broker from outside the model is your own arrangement.
 - **It does not manage `/etc/hosts.allow`.** Mosquitto is linked against
   `libwrap`, so those rules still apply if you write them.
-- **It does not stop you turning safety off.** `allow-anonymous=true` works; the
-  unit simply says, permanently, that it is not safe.
+- **It does not stop you turning safety off.** `allow-anonymous=true` works, and
+  the unit says so for as long as it is set — though an anonymous client is
+  granted no topics, so it can connect and do nothing else.
 
 ## Related
 

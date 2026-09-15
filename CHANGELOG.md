@@ -96,6 +96,14 @@ description of what the charm does rather than a list of changes to it.
   asks for.
 - The exporter reports a disabled plaintext listener through the unit status
   rather than logging the same warning on every update-status for ever.
+- `allow-anonymous` is documented as what it actually is: anonymous clients are
+  granted no topics, so they can connect and then neither publish nor subscribe.
+  The option's description, the unit status and the documentation all promised a
+  working, dangerous mode that did not exist, and `render_acl_file` carried an
+  unused parameter for granting anonymous access that nothing could reach.
+- Notes on an otherwise-active unit are aggregated into one status message. ops
+  keeps the first of several equal-priority statuses, so the anonymous-access
+  warning could be hidden behind a disabled bridge.
 - Changing `bridge-topics` now republishes the request to the upstream broker,
   so the new topics are actually granted. The bridge previously forwarded
   topics the upstream broker had never granted it, and carried no traffic on

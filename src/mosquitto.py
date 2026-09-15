@@ -603,14 +603,11 @@ def render_password_file(users: Mapping[str, str]) -> str:
     return ''.join(f'{username}:{password}\n' for username, password in sorted(users.items()))
 
 
-def render_acl_file(
-    rules: Mapping[str, Sequence[tuple[str, str]]], *, anonymous_topics: Sequence[str] = ()
-) -> str:
+def render_acl_file(rules: Mapping[str, Sequence[tuple[str, str]]]) -> str:
     """Render an ACL file.
 
     Args:
         rules: Usernames mapped to their (topic filter, access) pairs.
-        anonymous_topics: Topic filters granted read/write to unauthenticated clients.
 
     Returns:
         The file contents.
@@ -626,13 +623,14 @@ def render_acl_file(
                 )
 
     lines = ['# Managed by the mosquitto charm. Do not edit.', '']
-    # Rules before the first `user` line apply to anonymous clients. Note that these
-    # are the only global grants: `pattern` lines would apply to every user including
-    # those inside a `user` block, which is rarely what anyone means, so the charm
-    # does not emit them.
-    lines.extend(f'topic readwrite {topic}' for topic in anonymous_topics)
-    if anonymous_topics:
-        lines.append('')
+    # Nothing is written before the first `user` line, and rules before that line are
+    # the only ones anonymous clients get: with `allow-anonymous` set they can connect,
+    # and then neither publish nor subscribe to anything. There is no way to ask the
+    # charm for more, which is deliberate -- a grant to unauthenticated clients is a
+    # grant to everyone who can reach the port.
+    #
+    # `pattern` lines would be the other way to write a global grant, but they apply to
+    # every user, including inside a `user` block, which is rarely what anyone means.
     for username, permissions in sorted(rules.items()):
         lines.append(f'user {username}')
         for topic, access in permissions:
@@ -1086,23 +1084,17 @@ def write_password_file(file_paths: Paths, users: Mapping[str, str]) -> Change:
     return Change.RELOAD
 
 
-def write_acl_file(
-    file_paths: Paths,
-    rules: Mapping[str, Sequence[tuple[str, str]]],
-    *,
-    anonymous_topics: Sequence[str] = (),
-) -> Change:
+def write_acl_file(file_paths: Paths, rules: Mapping[str, Sequence[tuple[str, str]]]) -> Change:
     """Write the ACL file.
 
     Args:
         file_paths: Where Mosquitto's files live.
         rules: Usernames mapped to their (topic filter, access) pairs.
-        anonymous_topics: Topic filters granted to unauthenticated clients.
 
     Returns:
         Whether the broker needs to re-read the file. The ACL file is reload-safe.
     """
-    contents = render_acl_file(rules, anonymous_topics=anonymous_topics)
+    contents = render_acl_file(rules)
     changed = pathops.ensure_contents(
         file_paths.acl_file,
         contents,

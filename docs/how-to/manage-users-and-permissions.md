@@ -121,8 +121,14 @@ own copies.
 ## Anonymous access
 
 `allow-anonymous` defaults to `false` and should stay there. Setting it to `true`
-leaves the charm working, but the unit's status says so, permanently: an
-anonymous broker reachable beyond its own host is an open relay.
+leaves the charm working, and the unit's status says so for as long as it is set.
+
+It also does less than it looks like it does. The ACL file's grants to anonymous
+clients are the rules before its first `user` line, and the charm writes none, so
+an anonymous client can connect and then neither publish nor subscribe to
+anything. There is no configuration option that changes that: a grant to
+unauthenticated clients is a grant to everyone who can reach the port, so the
+charm does not offer one. Give each client its own user instead.
 
 ## Related
 

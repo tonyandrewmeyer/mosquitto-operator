@@ -984,38 +984,36 @@ class MosquittoCharm(ops.CharmBase):
             )
             return
 
-        if self._bridge_error is not None:
-            event.add_status(
-                ops.ActiveStatus(f'ready — the bridge is disabled: {self._bridge_error}')
-            )
-        if self._exporter_error is not None:
-            event.add_status(
-                ops.ActiveStatus(f'ready — metrics are not being exported: {self._exporter_error}')
-            )
-
+        # The broker is serving, so everything below is a note about how. They are
+        # aggregated rather than added as competing statuses: ops keeps the first of
+        # several equal-priority statuses, which would have hidden the security-relevant
+        # note behind whichever happened to be added first.
+        notes: list[str] = []
         if settings.allow_anonymous:
-            event.add_status(
-                ops.ActiveStatus('ready — anonymous access is enabled, which is not safe')
-            )
-        elif self.model.relations['upstream'] and not settings.bridge_topics.strip():
-            event.add_status(
-                ops.ActiveStatus('ready — the bridge forwards nothing until bridge-topics is set')
-            )
-        elif settings.tls_wanted and self._tls_material() is None:
-            # Key this off the certificate, not off the integration: relating a
+            notes.append('anonymous clients may connect, and are granted no topics')
+        if self._bridge_error is not None:
+            notes.append(f'the bridge is disabled: {self._bridge_error}')
+        if self._exporter_error is not None:
+            notes.append(f'metrics are not being exported: {self._exporter_error}')
+        if self.model.relations['upstream'] and not settings.bridge_topics.strip():
+            notes.append('the bridge forwards nothing until bridge-topics is set')
+        if not notes and settings.tls_wanted and self._tls_material() is None:
+            # Last, and only when there is nothing else to report: this is the standing
+            # state of every deployment that has not set up TLS, so it would otherwise
+            # be on the end of almost every status message.
+            #
+            # Key it off the certificate, not off the integration: relating a
             # certificate authority does not make TLS work, the authority issuing does,
             # and there is a gap of several hooks in between. Saying "ready" in that gap
             # tells the operator TLS is up when the listener is not open yet.
             if self.model.get_relation('certificates'):
-                event.add_status(
-                    ops.ActiveStatus('ready — waiting for a certificate to enable TLS')
-                )
+                notes.append('waiting for a certificate to enable TLS')
             else:
-                event.add_status(
-                    ops.ActiveStatus('ready — integrate a certificate authority to enable TLS')
-                )
-        else:
+                notes.append('integrate a certificate authority to enable TLS')
+        if not notes:
             event.add_status(ops.ActiveStatus())
+            return
+        event.add_status(ops.ActiveStatus(f'ready — {"; ".join(notes)}'))
 
     # --- Actions -------------------------------------------------------------
 

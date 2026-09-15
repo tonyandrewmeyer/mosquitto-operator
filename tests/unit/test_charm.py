@@ -517,8 +517,36 @@ def test_status_warns_about_anonymous_access(
     state_out = ctx.run(ctx.on.update_status(), state_in)
 
     assert state_out.unit_status == testing.ActiveStatus(
-        'ready — anonymous access is enabled, which is not safe'
+        'ready — anonymous clients may connect, and are granted no topics'
     )
+
+
+def test_status_notes_do_not_hide_each_other(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """ops keeps the first of several equal-priority statuses.
+
+    Adding one status per note would therefore have hidden every note but one, and the
+    one that survived would have been whichever was added first rather than whichever
+    mattered most.
+    """
+    fake.version = '2.0.18'
+    fake.exporter_start_error = 'could not start the metrics exporter: exit 1'
+    upstream = testing.Relation(
+        'upstream', remote_app_name='central', remote_app_data=upstream_databag()
+    )
+    state_in = make_state(
+        relations=[upstream, testing.Relation('cos-agent', remote_app_name='agent')],
+        config={'allow-anonymous': True, 'bridge-topics': 'topic sensors/# out'},
+    )
+
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
+
+    assert state_out.unit_status.name == 'active'
+    message = state_out.unit_status.message
+    assert message.startswith('ready — anonymous clients may connect')
+    assert 'the bridge is disabled' in message
+    assert 'metrics are not being exported' in message
 
 
 def test_status_warns_about_a_bridge_that_carries_nothing(

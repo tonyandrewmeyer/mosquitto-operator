@@ -42,7 +42,7 @@ is rejected. No two of them, nor `metrics-port`, may share a port.
 
 | Option | Type | Default | Applying it | Meaning |
 | --- | --- | --- | --- | --- |
-| `allow-anonymous` | boolean | `false` | reload | Whether clients may connect without credentials. Leave it false. When true the charm still runs, but says so in the unit's status for as long as it is set. |
+| `allow-anonymous` | boolean | `false` | reload | Whether clients may connect without credentials. Leave it false. Anonymous clients are granted no topics, so with this set they can connect and do nothing; the unit says so in its status for as long as it is set. |
 | `tls-version` | string | `tlsv1.2` | restart | The minimum TLS version accepted on the TLS listeners: `tlsv1.2` or `tlsv1.3`. |
 | `require-client-certificate` | boolean | `false` | restart | Whether TLS clients must present a certificate signed by the same authority as the broker's own (mutual TLS). |
 | `use-identity-as-username` | boolean | `false` | restart | Take the MQTT username from the client certificate's common name rather than from the CONNECT packet. Rejected without `require-client-certificate`, because there would be no certificate to take an identity from. |

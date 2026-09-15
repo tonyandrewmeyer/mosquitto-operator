@@ -415,12 +415,16 @@ def test_render_acl_file_never_emits_pattern_lines():
     assert 'pattern' not in rendered
 
 
-def test_render_acl_file_anonymous_topics_come_first():
-    """Rules before the first `user` line are the ones anonymous clients get."""
-    rendered = mosquitto.render_acl_file(
-        {'alice': [('a/#', 'read')]}, anonymous_topics=['public/#']
-    )
-    assert rendered.index('topic readwrite public/#') < rendered.index('user alice')
+def test_render_acl_file_grants_anonymous_clients_nothing():
+    """Rules before the first `user` line are the ones anonymous clients get.
+
+    The charm writes none, so `allow-anonymous` lets a client connect and then do
+    nothing at all. A grant to unauthenticated clients is a grant to everyone who can
+    reach the port, so there is deliberately no way to ask for one.
+    """
+    rendered = mosquitto.render_acl_file({'alice': [('a/#', 'read')]})
+    body = rendered.split('user alice')[0]
+    assert 'topic' not in body
 
 
 def test_render_acl_file_is_sorted_for_stability():

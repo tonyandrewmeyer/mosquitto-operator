@@ -111,8 +111,11 @@ config:
       description: |
         Whether clients may connect without credentials.
 
-        Leave this false. When it is true the charm still runs, but says so in its
-        status, because an anonymous broker reachable off the host is an open relay.
+        Leave this false. The charm grants anonymous clients no topics at all, so
+        with this set they can connect and then neither publish nor subscribe; the
+        unit says so in its status for as long as it is set. Give each client its
+        own user with the `set-password` and `grant` actions, or over the `mqtt`
+        integration, rather than turning this on.
     tls-version:
       type: string
       default: tlsv1.2

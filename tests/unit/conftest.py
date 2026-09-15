@@ -227,11 +227,9 @@ class FakeMosquitto:
         self,
         file_paths: mosquitto.Paths,
         rules: collections.abc.Mapping[str, collections.abc.Sequence[tuple[str, str]]],
-        *,
-        anonymous_topics: collections.abc.Sequence[str] = (),
     ) -> mosquitto.Change:
         self.calls.append('write_acl_file')
-        rendered = mosquitto.render_acl_file(rules, anonymous_topics=anonymous_topics)
+        rendered = mosquitto.render_acl_file(rules)
         changed = rendered != mosquitto.render_acl_file(self.rules)
         self.rules = {name: list(value) for name, value in rules.items()}
         return mosquitto.Change.RELOAD if changed else mosquitto.Change.NONE
