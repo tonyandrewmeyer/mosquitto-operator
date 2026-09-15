@@ -72,88 +72,93 @@ SYSCTL_TUNING = {
 # Directives Mosquitto re-reads on SIGHUP, from the "Reloaded on reload signal"
 # annotations in mosquitto.conf(5). A reload does not drop client connections, so
 # reaching for one of these rather than a restart is directly visible to users.
-RELOAD_SAFE_DIRECTIVES = frozenset({
-    'accept_protocol_versions',
-    'acl_file',
-    'allow_anonymous',
-    'allow_duplicate_messages',
-    'allow_zero_length_clientid',
-    'autosave_interval',
-    'autosave_on_changes',
-    'connection_messages',
-    'enable_control_api',
-    'global_max_clients',
-    'global_max_connections',
-    'log_dest',
-    'log_timestamp',
-    'log_timestamp_format',
-    'log_type',
-    'max_inflight_bytes',
-    'max_inflight_messages',
-    'max_keepalive',
-    'max_packet_size',
-    'max_queued_bytes',
-    'max_queued_messages',
-    'memory_limit',
-    'message_size_limit',
-    'per_listener_settings',
-    'persistence',
-    'persistence_file',
-    'persistence_location',
-    'persistent_client_expiration',
-    'psk_file',
-    'queue_qos0_messages',
-    'retain_available',
-    'retain_expiry_interval',
-    'set_tcp_nodelay',
-    'sys_interval',
-    'upgrade_outgoing_qos',
-})
+RELOAD_SAFE_DIRECTIVES = frozenset(
+    {
+        'accept_protocol_versions',
+        'acl_file',
+        'allow_anonymous',
+        'allow_duplicate_messages',
+        'allow_zero_length_clientid',
+        'autosave_interval',
+        'autosave_on_changes',
+        'connection_messages',
+        'enable_control_api',
+        'global_max_clients',
+        'global_max_connections',
+        'log_dest',
+        'log_timestamp',
+        'log_timestamp_format',
+        'log_type',
+        'max_inflight_bytes',
+        'max_inflight_messages',
+        'max_keepalive',
+        'max_packet_size',
+        'max_queued_bytes',
+        'max_queued_messages',
+        'memory_limit',
+        'message_size_limit',
+        'password_file',
+        'per_listener_settings',
+        'persistence',
+        'persistence_file',
+        'persistence_location',
+        'persistent_client_expiration',
+        'psk_file',
+        'queue_qos0_messages',
+        'retain_available',
+        'retain_expiry_interval',
+        'set_tcp_nodelay',
+        'sys_interval',
+        'upgrade_outgoing_qos',
+    }
+)
 
 # Directives that need the broker restarted. This list exists for documentation and
 # for tests; `classify_change` treats anything not in `RELOAD_SAFE_DIRECTIVES` as
 # needing a restart, because these lists differ between Mosquitto 2.0 and 2.1 and
 # guessing wrong in this direction merely costs a restart, whereas guessing wrong in
 # the other direction leaves the broker running a configuration nobody asked for.
-RESTART_REQUIRED_DIRECTIVES = frozenset({
-    'auth_plugin_deny_special_chars',
-    'bind_address',
-    'bind_interface',
-    'cafile',
-    'capath',
-    'certfile',
-    'ciphers',
-    'ciphers_tls1.3',
-    'crlfile',
-    'dhparamfile',
-    'disable_client_cert_date_checks',
-    'enable_proxy_protocol',
-    'global_plugin',
-    'http_dir',
-    'keyfile',
-    'listener',
-    'listener_allow_anonymous',
-    'max_connections',
-    'max_qos',
-    'mount_point',
-    'packet_buffer_size',
-    'pid_file',
-    'plugin',
-    'port',
-    'protocol',
-    'psk_hint',
-    'require_certificate',
-    'socket_domain',
-    'tls_engine',
-    'tls_keyform',
-    'tls_version',
-    'use_identity_as_username',
-    'use_subject_as_username',
-    'use_username_as_clientid',
-    'user',
-    'websockets_headers_size',
-    'websockets_origin',
-})
+RESTART_REQUIRED_DIRECTIVES = frozenset(
+    {
+        'auth_plugin_deny_special_chars',
+        'bind_address',
+        'bind_interface',
+        'cafile',
+        'capath',
+        'certfile',
+        'ciphers',
+        'ciphers_tls1.3',
+        'crlfile',
+        'dhparamfile',
+        'disable_client_cert_date_checks',
+        'enable_proxy_protocol',
+        'global_plugin',
+        'http_dir',
+        'keyfile',
+        'listener',
+        'listener_allow_anonymous',
+        'max_connections',
+        'max_qos',
+        'mount_point',
+        'packet_buffer_size',
+        'pid_file',
+        'plugin',
+        'port',
+        'protocol',
+        'psk_hint',
+        'require_certificate',
+        'socket_domain',
+        'tls_engine',
+        'tls_keyform',
+        'tls_version',
+        'use_identity_as_username',
+        'use_subject_as_username',
+        'use_username_as_clientid',
+        'user',
+        'websockets_headers_size',
+        'websockets_origin',
+    }
+)
 
 # The `log_type` values each charm log level expands to. Mosquitto's levels are not
 # ordered on their own, so the charm makes them cumulative, which is what operators
@@ -183,7 +188,7 @@ class ConfigError(Error):
     """Mosquitto rejected a configuration."""
 
 
-class Change(enum.Enum):
+class Change(enum.IntEnum):
     """What applying a configuration change requires.
 
     The values are ordered, so `max()` over a set of changes gives the strongest
@@ -358,7 +363,7 @@ class BrokerSettings:
     extra_config: str = ''
 
 
-def _quote(value: bool) -> str:  # noqa: FBT001
+def _quote(value: bool) -> str:  # A rendering helper, not an API.
     """Render a boolean the way mosquitto.conf spells it."""
     return 'true' if value else 'false'
 
@@ -380,7 +385,7 @@ def render_config(settings: BrokerSettings, file_paths: Paths) -> str:
     """
     lines = [
         '# Managed by the mosquitto charm. Do not edit: this file is rewritten on',
-        '# every configuration change. Use the charm\'s `extra-config` option for',
+        "# every configuration change. Use the charm's `extra-config` option for",
         '# directives the charm does not expose.',
         '',
         '# Per-listener security is deliberately off. With it on, a durable client',
@@ -395,57 +400,67 @@ def render_config(settings: BrokerSettings, file_paths: Paths) -> str:
     ]
 
     for listener in settings.listeners:
-        lines.append(f'listener {listener.port}{" " + listener.address if listener.address else ""}')
+        lines.append(
+            f'listener {listener.port}{" " + listener.address if listener.address else ""}'
+        )
         if listener.websockets:
             lines.append('protocol websockets')
         if listener.tls and settings.tls is not None:
-            lines.extend([
-                f'cafile {file_paths.certs_dir / "ca.crt"}',
-                f'certfile {file_paths.certs_dir / "server.crt"}',
-                f'keyfile {file_paths.certs_dir / "server.key"}',
-                f'tls_version {settings.tls_version}',
-                f'require_certificate {_quote(settings.require_client_certificate)}',
-            ])
+            lines.extend(
+                [
+                    f'cafile {file_paths.certs_dir / "ca.crt"}',
+                    f'certfile {file_paths.certs_dir / "server.crt"}',
+                    f'keyfile {file_paths.certs_dir / "server.key"}',
+                    f'tls_version {settings.tls_version}',
+                    f'require_certificate {_quote(settings.require_client_certificate)}',
+                ]
+            )
             if settings.require_client_certificate:
                 lines.append(
                     f'use_identity_as_username {_quote(settings.use_identity_as_username)}'
                 )
         lines.append('')
 
-    lines.extend([
-        f'persistence {_quote(settings.persistence)}',
-        f'persistence_location {file_paths.persistence_dir}/',
-        f'autosave_interval {settings.autosave_interval}',
-    ])
+    lines.extend(
+        [
+            f'persistence {_quote(settings.persistence)}',
+            f'persistence_location {file_paths.persistence_dir}/',
+            f'autosave_interval {settings.autosave_interval}',
+        ]
+    )
     if settings.persistent_client_expiration:
         # Left unset, disconnected durable sessions accumulate for ever, which is the
         # usual explanation for a broker whose memory only ever goes up.
         lines.append(f'persistent_client_expiration {settings.persistent_client_expiration}')
     lines.append('')
 
-    lines.extend([
-        f'max_connections {settings.max_connections}',
-        f'max_inflight_messages {settings.max_inflight_messages}',
-        f'max_queued_messages {settings.max_queued_messages}',
-        f'max_queued_bytes {settings.max_queued_bytes}',
-        f'max_packet_size {settings.max_packet_size}',
-        f'max_keepalive {settings.max_keepalive}',
-        f'memory_limit {settings.memory_limit}',
-        f'retain_available {_quote(settings.retain_available)}',
-        f'queue_qos0_messages {_quote(settings.queue_qos0_messages)}',
-        '',
-        f'log_dest file {file_paths.log_file}',
-    ])
+    lines.extend(
+        [
+            f'max_connections {settings.max_connections}',
+            f'max_inflight_messages {settings.max_inflight_messages}',
+            f'max_queued_messages {settings.max_queued_messages}',
+            f'max_queued_bytes {settings.max_queued_bytes}',
+            f'max_packet_size {settings.max_packet_size}',
+            f'max_keepalive {settings.max_keepalive}',
+            f'memory_limit {settings.memory_limit}',
+            f'retain_available {_quote(settings.retain_available)}',
+            f'queue_qos0_messages {_quote(settings.queue_qos0_messages)}',
+            '',
+            f'log_dest file {file_paths.log_file}',
+        ]
+    )
     # `log_dest file` rather than syslog, because the COS collectors scrape
     # /var/log/**/*log directly and opentelemetry-collector has no journald receiver.
     lines.extend(f'log_type {log_type}' for log_type in LOG_TYPES[settings.log_level])
-    lines.extend([
-        f'connection_messages {_quote(settings.connection_messages)}',
-        'log_timestamp true',
-        '',
-        f'sys_interval {settings.sys_interval}',
-        '',
-    ])
+    lines.extend(
+        [
+            f'connection_messages {_quote(settings.connection_messages)}',
+            'log_timestamp true',
+            '',
+            f'sys_interval {settings.sys_interval}',
+            '',
+        ]
+    )
 
     return '\n'.join(lines).rstrip() + '\n'
 
@@ -583,8 +598,7 @@ def render_acl_file(
     # are the only global grants: `pattern` lines would apply to every user including
     # those inside a `user` block, which is rarely what anyone means, so the charm
     # does not emit them.
-    for topic in anonymous_topics:
-        lines.append(f'topic readwrite {topic}')
+    lines.extend(f'topic readwrite {topic}' for topic in anonymous_topics)
     if anonymous_topics:
         lines.append('')
     for username, permissions in sorted(rules.items()):
@@ -620,7 +634,7 @@ def _run(
     Never invoked through a shell, and always with an absolute path, so that neither
     the operator's environment nor a topic name can change which program runs.
     """
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(
         [str(part) for part in command],
         capture_output=True,
         text=True,
@@ -772,6 +786,12 @@ def ensure_directories(file_paths: Paths) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         _chown(directory, file_paths.user, file_paths.group, mode)
 
+    # Since 2.0 the broker drops to its own user before opening the log, so a log file
+    # owned by root means it silently logs nothing -- and the only sign is a line in
+    # the journal at startup that nobody reads.
+    file_paths.log_file.touch(exist_ok=True)
+    _chown(file_paths.log_file, file_paths.user, file_paths.group, 0o640)
+
 
 def write_config(
     file_paths: Paths,
@@ -792,9 +812,9 @@ def write_config(
         The strongest action the change requires.
     """
     ensure_directories(file_paths)
-    _ensure_include_dir(file_paths)
 
     changes = [
+        _write_main_config(file_paths),
         _write_fragment(file_paths, CHARM_CONFIG_FILENAME, main, file_paths),
         _write_fragment(file_paths, BRIDGE_CONFIG_FILENAME, bridge, file_paths),
         _write_fragment(
@@ -809,9 +829,7 @@ def write_config(
     return max(changes)
 
 
-def _write_fragment(
-    file_paths: Paths, name: str, contents: str | None, target: Paths
-) -> Change:
+def _write_fragment(file_paths: Paths, name: str, contents: str | None, target: Paths) -> Change:
     """Write or remove one configuration fragment, classifying the difference."""
     path = file_paths.conf_dir / name
     old = path.read_text() if path.exists() else ''
@@ -826,25 +844,38 @@ def _write_fragment(
     return change
 
 
-def _ensure_include_dir(file_paths: Paths) -> None:
-    """Make sure the main config includes the charm's fragment directory.
+def _write_main_config(file_paths: Paths) -> Change:
+    """Take ownership of the main configuration file.
 
-    The Debian package's own mosquitto.conf already does this; the snap's does not,
-    and neither does a config the operator may have replaced.
+    The charm cannot simply append to the packaged `/etc/mosquitto/mosquitto.conf`,
+    because that file already sets `persistence`, `persistence_location` and
+    `log_dest` — and Mosquitto refuses to start when a directive is set twice, in any
+    file. So the main config becomes nothing but an include of the charm's fragment
+    directory, and everything real lives in fragments the charm owns outright.
+
+    The original is kept alongside, once, so that removing the charm leaves the
+    operator something to go back to.
     """
-    directive = f'include_dir {file_paths.conf_dir}'
-    existing = file_paths.config_file.read_text() if file_paths.config_file.exists() else ''
-    if any(
-        name == 'include_dir' and value == str(file_paths.conf_dir)
-        for name, value in parse_directives(existing)
-    ):
-        return
-    logger.info('Adding %s to %s.', directive, file_paths.config_file)
-    body = existing.rstrip()
-    contents = f'{body}\n{directive}\n' if body else f'{directive}\n'
-    pathops.ensure_contents(
+    contents = (
+        '# Managed by the mosquitto charm. Do not edit.\n'
+        '#\n'
+        '# The charm owns every directive, and writes them into the fragments in the\n'
+        '# directory below. The packaged configuration this replaced was saved as\n'
+        f'# {file_paths.config_file.name}.charm-orig.\n'
+        '\n'
+        f'include_dir {file_paths.conf_dir}\n'
+    )
+    backup = file_paths.config_file.with_suffix(file_paths.config_file.suffix + '.charm-orig')
+    if file_paths.config_file.exists() and not backup.exists():
+        existing = file_paths.config_file.read_text()
+        if existing != contents:
+            logger.info('Saving the packaged configuration as %s.', backup)
+            backup.write_text(existing)
+    changed = pathops.ensure_contents(
         file_paths.config_file, contents, mode=0o644, user='root', group='root'
     )
+    # The main config is read only at startup, so replacing it means a restart.
+    return Change.RESTART if changed else Change.NONE
 
 
 def write_password_file(file_paths: Paths, users: Mapping[str, str]) -> Change:
@@ -1022,6 +1053,12 @@ def write_service_overrides(file_paths: Paths, *, file_limit: int) -> bool:
 After=network-online.target
 Wants=network-online.target
 
+# The packaged unit inherits systemd's default rate limit, so a handful of quick
+# failures latches the unit into "start request repeated too quickly" and it then
+# refuses to start even once the configuration is fixed.
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
 [Service]
 LimitNOFILE={file_limit}
 Restart=on-failure
@@ -1032,7 +1069,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectHome=true
-ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -1045,19 +1081,26 @@ LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources
 
-# ProtectSystem=strict makes everything read-only, so the paths the broker writes
-# have to be named. These replace the packaged unit's ExecStartPre mkdirs, which
-# strict mode would otherwise break.
-StateDirectory=mosquitto
-LogsDirectory=mosquitto
-RuntimeDirectory=mosquitto
+# `full` rather than `strict`: strict makes the whole filesystem read-only, which
+# breaks the packaged unit's own ExecStartPre mkdir and chown before the broker even
+# runs. `full` protects /usr, /boot and /efi, which is the part that matters.
+ProtectSystem=full
 ReadWritePaths={file_paths.persistence_dir} {file_paths.log_file.parent}
+
+# Deliberately *not* set: SystemCallFilter=~@privileged. Mosquitto starts as root so
+# that it can bind a privileged port, then calls setuid and setgid to drop to its own
+# user -- both of which are in @privileged, so filtering it kills the broker with
+# SIGSYS before it finishes starting.
 """
-    return pathops.ensure_contents(
+    changed = pathops.ensure_contents(
         dropin_dir / DROPIN_FILENAME, contents, mode=0o644, user='root', group='root'
     )
+    if changed:
+        # systemd will not read a drop-in it has not been told about, and refuses to
+        # act on the unit at all until it has been reloaded.
+        systemd.daemon_reload()
+    return changed
 
 
 def apply_sysctl(*, enabled: bool) -> None:
@@ -1117,6 +1160,9 @@ def install_exporter(
         EXPORTER_INSTALL_PATH, source.read_text(), mode=0o755, user='root', group='root'
     )
 
+    # The service runs as a systemd DynamicUser, so it cannot read a root-owned file.
+    # Hand the password over as a systemd credential instead: systemd reads the file as
+    # root and exposes it to the service alone, under $CREDENTIALS_DIRECTORY.
     password_file = EXPORTER_INSTALL_PATH.parent / 'exporter.password'
     password_changed = pathops.ensure_contents(
         password_file, password, mode=0o600, user='root', group='root'
@@ -1133,13 +1179,13 @@ Wants={file_paths.service}.service
 Type=simple
 ExecStart=/usr/bin/python3 {EXPORTER_INSTALL_PATH} \\
     --broker-host {broker_host} --broker-port {broker_port} \\
-    --username {username} --password-file {password_file} \\
+    --username {username} --password-file %d/mqtt-password \\
     --listen-address {listen_address} --listen-port {listen_port} \\
     --mosquitto-sub-path {file_paths.sub_tool}
+LoadCredential=mqtt-password:{password_file}
 Restart=always
 RestartSec=5s
 DynamicUser=yes
-SupplementaryGroups={file_paths.group}
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -1203,6 +1249,8 @@ def apply(file_paths: Paths, change: Change) -> None:
     if not is_running(file_paths):
         logger.debug('Broker is not running; nothing to apply.')
         return
+    if change is Change.RESTART:
+        reset_failed(file_paths)
     try:
         if change is Change.RELOAD:
             logger.info('Reloading Mosquitto; client connections are unaffected.')
@@ -1216,12 +1264,32 @@ def apply(file_paths: Paths, change: Change) -> None:
         raise ServiceError(f'could not {change.name.lower()} Mosquitto: {e}') from e
 
 
+def reset_failed(file_paths: Paths) -> None:
+    """Clear a latched systemd failure, so the unit can be started again."""
+    with contextlib.suppress(Error, OSError, subprocess.SubprocessError):
+        _run(['/usr/bin/systemctl', 'reset-failed', file_paths.service], timeout=15, check=False)
+
+
+def last_log(file_paths: Paths, lines: int = 20) -> str:
+    """Return the tail of the broker's journal, for reporting why it would not start."""
+    try:
+        result = _run(
+            ['/usr/bin/journalctl', '-u', file_paths.service, '-n', str(lines), '--no-pager'],
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return result.stdout
+
+
 def start(file_paths: Paths) -> None:
     """Start and enable the broker.
 
     Raises:
         ServiceError: If the broker would not start.
     """
+    reset_failed(file_paths)
     try:
         systemd.service_enable(file_paths.service)
         systemd.service_start(file_paths.service)
@@ -1457,7 +1525,7 @@ def restore_backup(file_paths: Paths, source: pathlib.Path) -> None:
                     raise Error(f'{source} contains a link ({member.name}), which is not allowed')
                 if not any(target.is_relative_to(directory) for directory in permitted):
                     raise Error(f'{source} contains an unexpected path: {member.name}')
-            archive.extractall('/', members=members, filter='data')  # noqa: S202
+            archive.extractall('/', members=members, filter='data')
     except tarfile.TarError as e:
         raise Error(f'could not read the backup {source}: {e}') from e
     except OSError as e:
@@ -1465,7 +1533,9 @@ def restore_backup(file_paths: Paths, source: pathlib.Path) -> None:
 
     for path in file_paths.managed_files():
         if path.exists():
-            _chown(path, file_paths.user, file_paths.group, 0o600 if 'passwd' in path.name else 0o640)
+            _chown(
+                path, file_paths.user, file_paths.group, 0o600 if 'passwd' in path.name else 0o640
+            )
     logger.info('Restored %s.', source)
 
 
@@ -1497,7 +1567,9 @@ def migrate_state(old: Paths, new: Paths) -> None:
             target = new.certs_dir / certificate.name
             if not target.exists():
                 shutil.copy2(certificate, target)
-                _chown(target, new.user, new.group, 0o600 if certificate.suffix == '.key' else 0o644)
+                _chown(
+                    target, new.user, new.group, 0o600 if certificate.suffix == '.key' else 0o644
+                )
 
 
 def listeners_for(

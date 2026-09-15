@@ -68,9 +68,7 @@ class _Charm(ops.CharmBase):
         self.provider.publish_endpoints(
             event.relation, ENDPOINTS, tls_ca='-----BEGIN CERTIFICATE-----', mqtt_version='5.0'
         )
-        self.provider.set_credentials(
-            event.relation, BEHAVIOUR['username'], BEHAVIOUR['password']
-        )
+        self.provider.set_credentials(event.relation, BEHAVIOUR['username'], BEHAVIOUR['password'])
         self.provider.set_granted_permissions(event.relation, event.topic_permissions)
 
     def _on_client_departed(self, event: mqtt.MQTTClientDepartedEvent):
@@ -160,13 +158,15 @@ def test_provider_get_requests(ctx: testing.Context):
     request = requests[relation.id]
     assert request.app_name == 'telemetry'
     assert request.client_id_prefix == 'telemetry-'
-    assert request.topic_permissions == frozenset({
-        mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ)
-    })
-    assert request.requested_secrets == frozenset({
-        mqtt.SecretField.USERNAME,
-        mqtt.SecretField.PASSWORD,
-    })
+    assert request.topic_permissions == frozenset(
+        {mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ)}
+    )
+    assert request.requested_secrets == frozenset(
+        {
+            mqtt.SecretField.USERNAME,
+            mqtt.SecretField.PASSWORD,
+        }
+    )
     assert request.mtls_cert is None
 
 
@@ -179,9 +179,9 @@ def test_provider_emits_client_joined(ctx: testing.Context):
     with ctx(ctx.on.relation_changed(relation), state_in) as manager:
         manager.run()
         assert manager.charm.seen == ['joined:telemetry:telemetry-']
-        assert manager.charm.joined_permissions == frozenset({
-            mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ)
-        })
+        assert manager.charm.joined_permissions == frozenset(
+            {mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ)}
+        )
 
 
 # --------------------------------------------------------------------------------------
@@ -204,9 +204,7 @@ def test_provider_publishes_endpoints_and_credentials(ctx: testing.Context):
     ]
     assert _loaded(databag, 'tls-ca') == '-----BEGIN CERTIFICATE-----'
     assert _loaded(databag, 'mqtt-version') == '5.0'
-    assert _loaded(databag, 'granted-permissions') == [
-        {'filter': 'sensors/#', 'access': 'read'}
-    ]
+    assert _loaded(databag, 'granted-permissions') == [{'filter': 'sensors/#', 'access': 'read'}]
     assert _loaded(databag, 'error') is None
 
     # The credentials are in a secret, granted to this relation, and only the URI is
@@ -341,9 +339,9 @@ def test_secret_remove_ignores_other_secrets(ctx: testing.Context):
 
 def _provider_databag(**overrides: str) -> dict[str, str]:
     data = {
-        'endpoints': json.dumps([
-            {'host': '10.1.2.3', 'port': 8883, 'tls': True, 'protocol': 'mqtt'}
-        ]),
+        'endpoints': json.dumps(
+            [{'host': '10.1.2.3', 'port': 8883, 'tls': True, 'protocol': 'mqtt'}]
+        ),
         'granted-permissions': json.dumps([{'filter': 'sensors/#', 'access': 'read'}]),
         'client-id-prefix': json.dumps('telemetry-'),
         'tls-ca': json.dumps('-----BEGIN CERTIFICATE-----'),
@@ -374,12 +372,12 @@ def test_requirer_reads_the_connection(ctx: testing.Context):
     assert connection.tls_ca == '-----BEGIN CERTIFICATE-----'
     assert connection.mqtt_version == '5.0'
     assert connection.error is None
-    assert connection.endpoints == frozenset({
-        mqtt.Endpoint(host='10.1.2.3', port=8883, tls=True, protocol=mqtt.Protocol.MQTT)
-    })
-    assert connection.granted_permissions == frozenset({
-        mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ)
-    })
+    assert connection.endpoints == frozenset(
+        {mqtt.Endpoint(host='10.1.2.3', port=8883, tls=True, protocol=mqtt.Protocol.MQTT)}
+    )
+    assert connection.granted_permissions == frozenset(
+        {mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ)}
+    )
     assert next(iter(connection.endpoints)).uri == 'mqtts://10.1.2.3:8883'
 
 
@@ -548,32 +546,38 @@ def test_unknown_enum_values_become_unknown(raw: Any, expected: mqtt.Access):
 
 
 def test_unusable_collection_members_are_dropped():
-    data = mqtt.RequirerAppData.model_validate({
-        'topic-permissions': [
-            {'filter': 'a/#', 'access': 'read'},
-            {},
-            {'strange-data': 'bar'},
-            {'filter': 'b/#', 'access': 'read', 'new-field': 'd'},
-            {'filter': 'c/#', 'access': 'from-the-future'},
-            {'access': 'read'},
-        ]
-    })
-    assert data.topic_permissions == frozenset({
-        mqtt.TopicPermission(filter='a/#', access=mqtt.Access.READ),
-        mqtt.TopicPermission(filter='b/#', access=mqtt.Access.READ),
-    })
+    data = mqtt.RequirerAppData.model_validate(
+        {
+            'topic-permissions': [
+                {'filter': 'a/#', 'access': 'read'},
+                {},
+                {'strange-data': 'bar'},
+                {'filter': 'b/#', 'access': 'read', 'new-field': 'd'},
+                {'filter': 'c/#', 'access': 'from-the-future'},
+                {'access': 'read'},
+            ]
+        }
+    )
+    assert data.topic_permissions == frozenset(
+        {
+            mqtt.TopicPermission(filter='a/#', access=mqtt.Access.READ),
+            mqtt.TopicPermission(filter='b/#', access=mqtt.Access.READ),
+        }
+    )
 
 
 def test_out_of_range_endpoints_are_dropped():
-    data = mqtt.ProviderAppData.model_validate({
-        'endpoints': [
-            {'host': 'a', 'port': 1883},
-            {'host': 'b'},
-            {'port': 1883},
-            {'host': 'c', 'port': 0},
-            {'host': 'd', 'port': 70000},
-        ]
-    })
+    data = mqtt.ProviderAppData.model_validate(
+        {
+            'endpoints': [
+                {'host': 'a', 'port': 1883},
+                {'host': 'b'},
+                {'port': 1883},
+                {'host': 'c', 'port': 0},
+                {'host': 'd', 'port': 70000},
+            ]
+        }
+    )
     assert data.endpoints == frozenset({mqtt.Endpoint(host='a', port=1883)})
 
 
@@ -587,9 +591,7 @@ def test_out_of_range_endpoints_are_dropped():
         {'requested-secrets': '17'},
     ],
 )
-def test_malformed_requirer_databag_does_not_raise(
-    ctx: testing.Context, databag: dict[str, str]
-):
+def test_malformed_requirer_databag_does_not_raise(ctx: testing.Context, databag: dict[str, str]):
     relation = testing.Relation('mqtt', remote_app_name='telemetry', remote_app_data=databag)
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 
@@ -608,9 +610,7 @@ def test_malformed_requirer_databag_does_not_raise(
         {'secret-user': 'not json'},
     ],
 )
-def test_malformed_provider_databag_does_not_raise(
-    ctx: testing.Context, databag: dict[str, str]
-):
+def test_malformed_provider_databag_does_not_raise(ctx: testing.Context, databag: dict[str, str]):
     relation = testing.Relation('upstream', remote_app_name='broker', remote_app_data=databag)
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 
@@ -620,10 +620,12 @@ def test_malformed_provider_databag_does_not_raise(
 
 
 def test_unknown_top_level_fields_are_ignored():
-    data = mqtt.ProviderAppData.model_validate({
-        'mqtt-version': '5.0',
-        'a-field-from-v1': {'anything': True},
-    })
+    data = mqtt.ProviderAppData.model_validate(
+        {
+            'mqtt-version': '5.0',
+            'a-field-from-v1': {'anything': True},
+        }
+    )
     assert data.mqtt_version == '5.0'
 
 
@@ -632,16 +634,21 @@ def test_unknown_top_level_fields_are_ignored():
 # --------------------------------------------------------------------------------------
 
 FULL_PROVIDER_DATA = mqtt.ProviderAppData(
-    endpoints=frozenset({
-        mqtt.Endpoint(host='10.1.2.3', port=1883, tls=False, protocol=mqtt.Protocol.MQTT),
-        mqtt.Endpoint(host='broker.example.com', port=443, tls=True,
-                      protocol=mqtt.Protocol.WEBSOCKETS),
-    }),
+    endpoints=frozenset(
+        {
+            mqtt.Endpoint(host='10.1.2.3', port=1883, tls=False, protocol=mqtt.Protocol.MQTT),
+            mqtt.Endpoint(
+                host='broker.example.com', port=443, tls=True, protocol=mqtt.Protocol.WEBSOCKETS
+            ),
+        }
+    ),
     secret_user='secret:cvh7kruupa1s46bqvuig',
-    granted_permissions=frozenset({
-        mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ),
-        mqtt.TopicPermission(filter='commands/#', access=mqtt.Access.WRITE),
-    }),
+    granted_permissions=frozenset(
+        {
+            mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ),
+            mqtt.TopicPermission(filter='commands/#', access=mqtt.Access.WRITE),
+        }
+    ),
     client_id_prefix='telemetry-',
     tls_ca='-----BEGIN CERTIFICATE-----',
     mqtt_version='5.0',
@@ -649,16 +656,20 @@ FULL_PROVIDER_DATA = mqtt.ProviderAppData(
 )
 
 FULL_REQUIRER_DATA = mqtt.RequirerAppData(
-    topic_permissions=frozenset({
-        mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ),
-        mqtt.TopicPermission(filter='commands/#', access=mqtt.Access.WRITE),
-    }),
+    topic_permissions=frozenset(
+        {
+            mqtt.TopicPermission(filter='sensors/#', access=mqtt.Access.READ),
+            mqtt.TopicPermission(filter='commands/#', access=mqtt.Access.WRITE),
+        }
+    ),
     client_id_prefix='telemetry-',
-    requested_secrets=frozenset({
-        mqtt.SecretRequest(field=mqtt.SecretField.USERNAME),
-        mqtt.SecretRequest(field=mqtt.SecretField.PASSWORD),
-        mqtt.SecretRequest(field=mqtt.SecretField.TLS_CA),
-    }),
+    requested_secrets=frozenset(
+        {
+            mqtt.SecretRequest(field=mqtt.SecretField.USERNAME),
+            mqtt.SecretRequest(field=mqtt.SecretField.PASSWORD),
+            mqtt.SecretRequest(field=mqtt.SecretField.TLS_CA),
+        }
+    ),
     mtls_cert='-----BEGIN CERTIFICATE-----',
 )
 
@@ -667,9 +678,7 @@ FULL_REQUIRER_DATA = mqtt.RequirerAppData(
     ('endpoint', 'model'),
     [('mqtt', FULL_PROVIDER_DATA), ('upstream', FULL_REQUIRER_DATA)],
 )
-def test_every_field_round_trips(
-    ctx: testing.Context, endpoint: str, model: Any
-):
+def test_every_field_round_trips(ctx: testing.Context, endpoint: str, model: Any):
     relation = testing.Relation(endpoint, remote_app_name='peer')
     state_in = testing.State(leader=True, model=LXD, relations={relation})
 

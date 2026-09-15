@@ -31,7 +31,7 @@ import dataclasses
 import enum
 import json
 import logging
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any
 
 import ops
 import pydantic
@@ -94,7 +94,7 @@ class SecretField(enum.StrEnum):
 
     UNKNOWN = 'UNKNOWN'
     USERNAME = 'username'
-    PASSWORD = 'password'
+    PASSWORD = 'password'  # noqa: S105
     TLS_CA = 'tls-ca'
 
 
@@ -107,10 +107,9 @@ class ErrorCode(enum.StrEnum):
     BROKER_UNAVAILABLE = 'broker-unavailable'
 
 
-_E = TypeVar('_E', bound=enum.StrEnum)
-
-
-def _coerce(enum_class: type[_E]) -> collections.abc.Callable[[Any], _E]:
+def _coerce[EnumT: enum.StrEnum](
+    enum_class: type[EnumT],
+) -> collections.abc.Callable[[Any], EnumT]:
     """Build a validator that maps an unrecognised value to the enum's `UNKNOWN`.
 
     Args:
@@ -120,7 +119,7 @@ def _coerce(enum_class: type[_E]) -> collections.abc.Callable[[Any], _E]:
         A callable suitable for use as a pydantic "before" validator.
     """
 
-    def validate(value: Any) -> _E:
+    def validate(value: Any) -> EnumT:
         if isinstance(value, enum_class):
             return value
         try:
@@ -279,10 +278,7 @@ class Error(pydantic.BaseModel, frozen=True):
     )
 
 
-_I = TypeVar('_I', bound=_Item)
-
-
-def _drop_unusable(items: frozenset[_I] | None) -> frozenset[_I] | None:
+def _drop_unusable[ItemT: _Item](items: frozenset[ItemT] | None) -> frozenset[ItemT] | None:
     """Discard collection members that carry no usable information.
 
     Args:
@@ -491,7 +487,8 @@ def parse_secret_content(content: collections.abc.Mapping[str, str]) -> UserSecr
         The parsed model. Unrecognised keys are ignored, so that content written by a
         newer peer still parses.
     """
-    return UserSecret.model_validate({key.replace('-', '_'): value for key, value in content.items()})
+    renamed = {key.replace('-', '_'): value for key, value in content.items()}
+    return UserSecret.model_validate(renamed)
 
 
 # --------------------------------------------------------------------------------------
@@ -609,12 +606,10 @@ class MQTTRequirerEvents(ops.ObjectEvents):
 # Reading and writing databags
 # --------------------------------------------------------------------------------------
 
-_M = TypeVar('_M', bound=pydantic.BaseModel)
 
-
-def _load(
-    model: type[_M], relation: ops.Relation, source: ops.Application | None
-) -> _M | None:
+def _load[ModelT: pydantic.BaseModel](
+    model: type[ModelT], relation: ops.Relation, source: ops.Application | None
+) -> ModelT | None:
     """Load one side of a relation's application databag.
 
     Args:
@@ -948,10 +943,12 @@ class MQTTRequirer(ops.Object):
             return
         # Our provider always delivers the credentials through a Juju secret, so these
         # are the fields we always ask for.
-        requested = frozenset({
-            SecretRequest(field=SecretField.USERNAME),
-            SecretRequest(field=SecretField.PASSWORD),
-        })
+        requested = frozenset(
+            {
+                SecretRequest(field=SecretField.USERNAME),
+                SecretRequest(field=SecretField.PASSWORD),
+            }
+        )
         data = RequirerAppData(
             topic_permissions=self._topic_permissions or None,
             client_id_prefix=self._client_id_prefix,

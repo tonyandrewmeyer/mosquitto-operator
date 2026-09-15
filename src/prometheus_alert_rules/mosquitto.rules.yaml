@@ -1,0 +1,170 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+#
+# Alerting rules for the Mosquitto broker, shipped to Prometheus through the
+# charm's `cos_agent` relation.
+#
+# Do not add `juju_model`, `juju_application` or `juju_unit` matchers to these
+# expressions: COS injects the Juju topology labels into every selector when it
+# ingests the rules, so a hand-written matcher would be duplicated at best and
+# wrong at worst.
+#
+# The metric names are those of `sapcc/mosquitto-exporter`, which the charm's own
+# exporter reproduces.
+groups:
+  - name: mosquitto
+    rules:
+
+      # The only metric that directly means "you have lost data". Everything else
+      # in this file is a leading indicator; this one is the event itself.
+      - alert: MosquittoMessagesDropped
+        expr: rate(broker_publish_messages_dropped[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Mosquitto is dropping PUBLISH messages.
+          description: >-
+            The broker has discarded {{ $value | printf "%.2f" }} PUBLISH messages
+            per second over the last five minutes, which is unrecoverable data
+            loss. A subscriber is almost certainly too slow to keep up, or a
+            publisher is outrunning the queue. Find the slow client in the broker
+            log, then either fix the client or raise the `max-queued-messages`
+            and `max-inflight-messages` charm config options. Raising the limits
+            alone only moves the problem into memory.
+
+      # The broker is not publishing $SYS at all.
+      - alert: MosquittoDown
+        expr: mosquitto_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The Mosquitto broker is not responding.
+          description: >-
+            No `$SYS` message has reached the exporter for over a minute, so the
+            broker is down, wedged, or refusing the exporter's credentials. Check
+            `systemctl status mosquitto` and `journalctl -u mosquitto` on the
+            unit. If the broker is running, check that the `_charm_metrics` user
+            still exists in the password file and that the ACL grants it
+            `read $SYS/#`.
+
+      # The exporter itself, or the scrape path to it, has failed. Without this
+      # rule an exporter crash looks like silence rather than like a problem.
+      - alert: MosquittoExporterDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The Mosquitto metrics exporter cannot be scraped.
+          description: >-
+            Prometheus cannot reach the exporter, so broker metrics are missing
+            and every other rule in this file is blind. Check
+            `systemctl status mosquitto-exporter` on the unit, and confirm that
+            the exporter is bound to the unit's private address on the configured
+            `metrics-port`.
+
+      # The uptime counter went backwards, which only happens across a restart.
+      - alert: MosquittoRestarted
+        expr: resets(broker_uptime[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The Mosquitto broker restarted unexpectedly.
+          description: >-
+            `broker_uptime` reset in the last fifteen minutes. Every client was
+            disconnected and every non-persistent session was lost. If this was
+            not a charm-driven config change or upgrade, look for an OOM kill
+            (`journalctl -k | grep -i oom`) or a crash, and check whether systemd
+            is restarting the broker in a loop.
+
+      # Approaching the connection ceiling. The charm's `max-connections` default
+      # is 1024, so the threshold is 85% of that; retune this expression if the
+      # application is deployed with a different value.
+      - alert: MosquittoConnectionsNearLimit
+        expr: broker_clients_connected > 870
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mosquitto is close to its connection limit.
+          description: >-
+            {{ $value }} clients are connected, against a default
+            `max-connections` of 1024. New connections will be refused once the
+            limit is reached. Raise the `max-connections` charm config option,
+            which also raises `open-file-limit` unless that has been pinned, or
+            move some clients to another broker.
+
+      # The classic slow leak: durable sessions that nothing ever reconnects to.
+      # Each one holds queued messages and subscription state for ever.
+      - alert: MosquittoDisconnectedSessionsGrowing
+        expr: >-
+          deriv(broker_clients_disconnected[6h]) > 0.01
+          and broker_clients_disconnected > 1000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Abandoned Mosquitto sessions are accumulating.
+          description: >-
+            {{ $value }} persistent sessions have no connected client, and the
+            count has been climbing for six hours. This is the leading indicator
+            of the memory leak that eventually takes the broker out. Set the
+            `persistent-client-expiration` charm config option, and check whether
+            a fleet of clients is connecting with `clean_session` false and a
+            fresh client ID each time.
+
+      # Retained messages never expire on their own before Mosquitto 2.1.
+      - alert: MosquittoRetainedMessagesGrowing
+        expr: >-
+          deriv(broker_retained_messages_count[24h]) > 0.05
+          and broker_retained_messages_count > 10000
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: Mosquitto retained messages are growing without bound.
+          description: >-
+            The broker holds {{ $value }} retained messages and the count has
+            risen steadily for a day. Retained messages live until they are
+            explicitly cleared, so this grows until the broker runs out of
+            memory. Find the publisher that retains on a per-device topic, have
+            it publish an empty retained payload to clear stale topics, or set
+            `retain-expiry-interval` if the broker is 2.1 or newer.
+
+      # Memory creeping up. Paired with an absolute floor so that a small broker
+      # doing normal work does not page anybody.
+      - alert: MosquittoHeapGrowing
+        expr: >-
+          deriv(broker_heap_current[6h]) > 1e4
+          and broker_heap_current > 5e8
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: The Mosquitto heap is growing steadily.
+          description: >-
+            The broker is using {{ $value | humanize1024 }}B of heap and has been
+            growing for six hours. Mosquitto is a single process with no memory
+            cap by default, so this ends in an OOM kill. Check
+            `broker_retained_messages_count` and `broker_clients_disconnected`
+            first, since those two account for almost every real leak, then the
+            `broker_store_messages_bytes` backlog.
+
+      # A bridge to another broker is down: messages are queueing or being lost
+      # at the far end, and nothing else in this file will show it.
+      - alert: MosquittoBridgeDown
+        expr: mosquitto_bridge_state == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A Mosquitto bridge connection is down.
+          description: >-
+            The bridge `{{ $labels.bridge }}` has been disconnected for five
+            minutes, so nothing is flowing to or from the remote broker. Check
+            the network path and the remote broker's credentials and TLS
+            material, then `journalctl -u mosquitto | grep -i bridge` for the
+            reason it was refused.

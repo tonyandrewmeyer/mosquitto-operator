@@ -13,14 +13,14 @@ import socket
 from typing import TYPE_CHECKING
 
 import ops
-import ops.tracing
+import ops_tracing
 import pydantic
 from charmlibs.interfaces import tls_certificates
+from charms.grafana_agent.v0.cos_agent import COSAgentProvider
 
 import config
 import mosquitto
 import mqtt
-from charms.grafana_agent.v0.cos_agent import COSAgentProvider
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 PEER = 'mosquitto-peers'
 USERS_KEY = 'users'
-SECRET_LABEL = 'mqtt-user-{username}'
+SECRET_LABEL = 'mqtt-user-{username}'  # noqa: S105 — a label template, not a secret.
 SOURCE_KEY = 'install-source'
 EXPORTER_SOURCE = pathlib.Path(__file__).parent / 'exporter.py'
 
@@ -40,7 +40,12 @@ class MosquittoCharm(ops.CharmBase):
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
 
-        self._tracing = ops.tracing.Tracing(
+        # Set when the broker refuses to start or reload, so that the unit goes to
+        # blocked with the broker's own complaint rather than the hook failing with a
+        # traceback the operator has to go and find in the log.
+        self._service_error: str | None = None
+
+        self._tracing = ops_tracing.Tracing(
             self, 'charm-tracing', ca_relation_name='receive-ca-cert'
         )
         self.mqtt = mqtt.MQTTProvider(self, 'mqtt')
@@ -222,6 +227,18 @@ class MosquittoCharm(ops.CharmBase):
         if secret.peek_content() != content:
             secret.set_content(content)
 
+    def _secret_id(self, username: str) -> str | None:
+        """Return the Juju secret id holding a user's password.
+
+        A secret fetched by label does not carry its id, so it has to be asked for
+        separately.
+        """
+        try:
+            secret = self.model.get_secret(label=SECRET_LABEL.format(username=username))
+        except ops.SecretNotFoundError:
+            return None
+        return secret.get_info().id
+
     def _forget_password(self, username: str) -> None:
         """Remove a user's secret."""
         try:
@@ -386,10 +403,21 @@ class MosquittoCharm(ops.CharmBase):
             changes.append(mosquitto.Change.RESTART)
         mosquitto.apply_sysctl(enabled=settings.sysctl_tuning)
 
-        if not mosquitto.is_running(paths):
-            mosquitto.start(paths)
-        else:
-            mosquitto.apply(paths, mosquitto.merge_changes(changes))
+        try:
+            if not mosquitto.is_running(paths):
+                mosquitto.start(paths)
+            else:
+                mosquitto.apply(paths, mosquitto.merge_changes(changes))
+        except mosquitto.ServiceError as e:
+            # `systemctl reload` in particular is asynchronous and succeeds even for a
+            # configuration the broker then rejects, so the journal is the only place
+            # that says what was actually wrong with it.
+            self._service_error = str(e)
+            logger.error('Mosquitto would not come up: %s', e)
+            journal = mosquitto.last_log(paths)
+            if journal:
+                logger.error('Recent Mosquitto log:\n%s', journal)
+            return
 
         self._reconcile_exporter(settings, paths, users)
         self._publish_mqtt(settings, material is not None)
@@ -553,13 +581,24 @@ class MosquittoCharm(ops.CharmBase):
 
         endpoints = []
         if settings.port:
-            endpoints.append(mqtt.Endpoint(host=address, port=settings.port, tls=False))
+            endpoints.append(
+                mqtt.Endpoint(
+                    host=address, port=settings.port, tls=False, protocol=mqtt.Protocol.MQTT
+                )
+            )
         if have_tls and settings.tls_port:
-            endpoints.append(mqtt.Endpoint(host=address, port=settings.tls_port, tls=True))
+            endpoints.append(
+                mqtt.Endpoint(
+                    host=address, port=settings.tls_port, tls=True, protocol=mqtt.Protocol.MQTT
+                )
+            )
         if settings.websockets_port:
             endpoints.append(
                 mqtt.Endpoint(
-                    host=address, port=settings.websockets_port, tls=False, protocol='websockets'
+                    host=address,
+                    port=settings.websockets_port,
+                    tls=False,
+                    protocol=mqtt.Protocol.WEBSOCKETS,
                 )
             )
         if have_tls and settings.tls_websockets_port:
@@ -568,7 +607,7 @@ class MosquittoCharm(ops.CharmBase):
                     host=address,
                     port=settings.tls_websockets_port,
                     tls=True,
-                    protocol='websockets',
+                    protocol=mqtt.Protocol.WEBSOCKETS,
                 )
             )
 
@@ -595,15 +634,15 @@ class MosquittoCharm(ops.CharmBase):
             self.mqtt.set_credentials(relation, username, password)
             self.mqtt.set_granted_permissions(
                 relation,
-                [mqtt.TopicPermission(filter=topic, access=mqtt.Access(access))
-                 for topic, access in granted],
+                [
+                    mqtt.TopicPermission(filter=topic, access=mqtt.Access(access))
+                    for topic, access in granted
+                ],
             )
         if changed:
             self._save_users(users)
 
-    def _grant_for(
-        self, requested: Sequence[mqtt.TopicPermission]
-    ) -> list[tuple[str, str]]:
+    def _grant_for(self, requested: Sequence[mqtt.TopicPermission]) -> list[tuple[str, str]]:
         """Decide what a client actually gets, given what it asked for.
 
         Requests are granted as made, except that nothing may reach `$SYS`: the
@@ -662,14 +701,15 @@ class MosquittoCharm(ops.CharmBase):
             return
 
         settings = self._config
-        assert settings is not None  # noqa: S101 — guarded by the config error check above.
+        assert settings is not None
         paths = mosquitto.paths(settings.install_source)
 
         if mosquitto.get_version(settings.install_source) is None:
             event.add_status(ops.MaintenanceStatus('installing Mosquitto'))
             return
         if not mosquitto.is_running(paths):
-            event.add_status(ops.BlockedStatus('Mosquitto is not running; check the unit log'))
+            reason = self._service_error or 'check `juju debug-log` and the unit journal'
+            event.add_status(ops.BlockedStatus(f'Mosquitto is not running — {reason}'))
             return
 
         if settings.allow_anonymous:
@@ -708,13 +748,15 @@ class MosquittoCharm(ops.CharmBase):
             self._save_users(users)
         self._set_password(params.username, password)
         self._reconcile()
-        event.set_results({
-            'username': params.username,
-            'secret-id': self.model.get_secret(
-                label=SECRET_LABEL.format(username=params.username)
-            ).id,
-            'generated': 'true' if params.password is None else 'false',
-        })
+        event.set_results(
+            {
+                'username': params.username,
+                'secret-id': self.model.get_secret(
+                    label=SECRET_LABEL.format(username=params.username)
+                ).id,
+                'generated': 'true' if params.password is None else 'false',
+            }
+        )
         event.log(
             'The password is in the Juju secret above; read it with '
             '`juju show-secret --reveal <id>`.'
@@ -738,20 +780,22 @@ class MosquittoCharm(ops.CharmBase):
     def _on_list_users(self, event: ops.ActionEvent) -> None:
         """List the managed users and their permissions."""
         users = self._load_users()
-        event.set_results({
-            'users': json.dumps(
-                {
-                    username: {
-                        'owner': record.get('owner', 'action'),
-                        'acl': record.get('acl', []),
-                    }
-                    for username, record in sorted(users.items())
-                },
-                indent=2,
-                sort_keys=True,
-            ),
-            'count': len(users),
-        })
+        event.set_results(
+            {
+                'users': json.dumps(
+                    {
+                        username: {
+                            'owner': record.get('owner', 'action'),
+                            'acl': record.get('acl', []),
+                        }
+                        for username, record in sorted(users.items())
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                'count': len(users),
+            }
+        )
 
     def _on_grant(self, event: ops.ActionEvent) -> None:
         """Grant a user access to a topic filter."""
@@ -801,18 +845,32 @@ class MosquittoCharm(ops.CharmBase):
             return
         paths = mosquitto.paths(settings.install_source)
         password = self._password_for(mosquitto.HEALTH_USER)
+        # The TLS listener only exists once a certificate authority has issued, so
+        # checking it otherwise reports a failure for something that was never
+        # configured.
+        have_tls = self._tls_material() is not None
 
         results: dict[str, str] = {}
         checks: list[tuple[str, int, pathlib.Path | None]] = []
         if params.listener in (config.Listener.PLAIN, config.Listener.ALL) and settings.port:
             checks.append(('plain', settings.port, None))
-        if params.listener in (config.Listener.TLS, config.Listener.ALL) and settings.tls_port:
+        if (
+            params.listener in (config.Listener.TLS, config.Listener.ALL)
+            and settings.tls_port
+            and have_tls
+        ):
             # The TLS listener is checked separately on purpose: a certificate renewal
             # that leaves the key unreadable breaks only this one, and a plaintext
             # check would happily report everything as fine.
             checks.append(('tls', settings.tls_port, paths.certs_dir / 'ca.crt'))
         if not checks:
-            event.fail('There is no listener to check.')
+            if params.listener is config.Listener.TLS and not have_tls:
+                event.fail(
+                    'There is no TLS listener: integrate a certificate authority on '
+                    '`certificates` first.'
+                )
+            else:
+                event.fail('There is no listener to check.')
             return
 
         failures = []

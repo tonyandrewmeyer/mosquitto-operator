@@ -23,23 +23,25 @@ import mqtt
 # the broker stops matching the broker. `listener` and `allow_anonymous` are the
 # dangerous pair: with no listener defined, Mosquitto 2.x permits anonymous access on
 # loopback, so removing the charm's listener silently re-enables it.
-RESERVED_DIRECTIVES = frozenset({
-    'acl_file',
-    'allow_anonymous',
-    'bind_address',
-    'bind_interface',
-    'listener',
-    'password_file',
-    'per_listener_settings',
-    'plugin',
-    'global_plugin',
-    'auth_plugin',
-    'port',
-    'user',
-})
+RESERVED_DIRECTIVES = frozenset(
+    {
+        'acl_file',
+        'allow_anonymous',
+        'bind_address',
+        'bind_interface',
+        'listener',
+        'password_file',
+        'per_listener_settings',
+        'plugin',
+        'global_plugin',
+        'auth_plugin',
+        'port',
+        'user',
+    }
+)
 
 _DURATION_RE = re.compile(r'^\d+[hdwm]$')
-_TOPIC_DIRECTIVE_RE = re.compile(r'^topic\s+\S+(\s+(in|out|both))?(\s+\S+){0,2}\s*$')
+_TOPIC_DIRECTIVE_RE = re.compile(r'^topic\s+\S+(\s+(in|out|both)(\s+\S+){0,2})?\s*$')
 
 Port = Annotated[int, pydantic.Field(ge=0, le=65535)]
 """A TCP port, where 0 means "do not listen"."""
@@ -147,13 +149,15 @@ class MosquittoConfig(pydantic.BaseModel):
     @classmethod
     def _check_extra_config(cls, value: str) -> str:
         """Reject directives that would undermine what the charm manages."""
-        offenders = sorted({
-            directive
-            for directive in (
-                line.split()[0].lower() for line in value.splitlines() if line.split()
-            )
-            if not directive.startswith('#') and directive in RESERVED_DIRECTIVES
-        })
+        offenders = sorted(
+            {
+                directive
+                for directive in (
+                    line.split()[0].lower() for line in value.splitlines() if line.split()
+                )
+                if not directive.startswith('#') and directive in RESERVED_DIRECTIVES
+            }
+        )
         if offenders:
             raise ValueError(
                 f'extra-config must not set directives the charm manages: '
@@ -265,9 +269,7 @@ class SetPasswordParams(pydantic.BaseModel):
         if any(character in value for character in cls._FORBIDDEN):
             raise ValueError('username must not contain a colon or a line break')
         if value.startswith('_'):
-            raise ValueError(
-                'usernames beginning with an underscore are reserved for the charm'
-            )
+            raise ValueError('usernames beginning with an underscore are reserved for the charm')
         return value
 
 

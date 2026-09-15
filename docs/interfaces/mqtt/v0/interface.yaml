@@ -1,0 +1,25 @@
+name: mqtt
+version: 0
+status: draft
+lib: charmlibs.interfaces.mqtt
+summary: Publish to and subscribe to topics on an MQTT broker.
+description: |
+  The `mqtt` interface allows charms to obtain credentials and topic permissions for an
+  MQTT broker. The requirer charm asks for a set of topic filters and the access it wants
+  on each of them; the provider charm creates a broker user, installs the corresponding
+  access control entries, and publishes the listeners to connect to. Credentials are
+  never placed in the databag: the provider puts them in an application-owned Juju
+  secret, grants that secret to the relation, and publishes only the secret URI.
+
+  The topic filter and access vocabulary is Mosquitto's own `acl_file` grammar, so a
+  granted permission maps onto an access control entry with no translation.
+
+providers:
+  - name: mosquitto
+    url: https://github.com/tonyandrewmeyer/mosquitto-operator
+
+requirers:
+  - name: mosquitto
+    url: https://github.com/tonyandrewmeyer/mosquitto-operator
+
+maintainer: tonyandrewmeyer

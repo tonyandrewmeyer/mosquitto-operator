@@ -808,9 +808,11 @@ def run_subscriber(
 ) -> None:
     """Run ``mosquitto_sub`` and feed its output into the registry, restarting as needed.
 
-    If the subscriber exits for any reason the broker is left to go stale, which drives
-    ``mosquitto_up`` to 0, and the subscriber is restarted after a capped exponential
-    backoff.
+    ``mosquitto_sub`` reconnects on its own when the broker goes away and comes back, so
+    in practice this loop only runs a second time when the subscriber dies outright: a
+    missing binary, a rejected password, or a signal. Either way the registry simply
+    stops being updated, which drives ``mosquitto_up`` to 0 once the staleness window
+    passes, and the subscriber is restarted after a capped exponential backoff.
 
     Args:
         command: The argument vector for the subscriber.
@@ -898,6 +900,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='mosquitto-exporter',
         description='Export Eclipse Mosquitto $SYS metrics in Prometheus text format.',
+        # Without this, --password is accepted as an abbreviation of --password-file,
+        # which is exactly the mistake this program refuses to allow.
+        allow_abbrev=False,
     )
     parser.add_argument('--broker-host', default='127.0.0.1', help='broker host to connect to')
     parser.add_argument('--broker-port', type=int, default=1883, help='broker port to connect to')

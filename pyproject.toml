@@ -172,10 +172,14 @@ banned-from = [
     # Charming
     "ops", "ops.testing", "ops.pebble", "ops.charm", "ops.model", "ops.framework",
     "ops_tracing", "jubilant", "cosl",
-    "charmlibs", "charmlibs.apt", "charmlibs.snap", "charmlibs.systemd",
-    "charmlibs.sysctl", "charmlibs.pathops", "charmlibs.interfaces",
-    # Standard library
-    "collections", "collections.abc", "contextlib", "dataclasses", "datetime",
+    # `charmlibs` and `charmlibs.interfaces` are deliberately absent: `from charmlibs
+    # import apt` is the import form the charmlibs project itself documents, and the
+    # submodules are not importable any other way.
+    "charmlibs.apt", "charmlibs.snap", "charmlibs.systemd",
+    "charmlibs.sysctl", "charmlibs.pathops",
+    # Standard library. `collections.abc` is absent because it appears only inside
+    # `if TYPE_CHECKING:` blocks, where it is a typing import in all but name.
+    "collections", "contextlib", "dataclasses", "datetime",
     "enum", "functools", "grp", "hashlib", "ipaddress", "itertools", "json",
     "logging", "os", "os.path", "pathlib", "pwd", "re", "secrets", "shutil",
     "socket", "ssl", "string", "subprocess", "sys", "tempfile", "textwrap",
@@ -188,7 +192,10 @@ banned-from = [
 max-complexity = 10
 
 [tool.codespell]
-skip = "./lib,./docs/research,./icon.svg,./uv.lock,./build,./.tox,./.git,./.venv,./.ruff_cache,./.pytest_cache,./htmlcov"
+# codespell matches these with fnmatch against each path it walks, so a bare
+# directory name prunes that directory wherever it appears, and a nested path
+# needs a leading wildcard.
+skip = "lib,*/docs/research,icon.svg,uv.lock,build,.tox,.git,.venv,.ruff_cache,.pytest_cache,htmlcov"
 
 [tool.pyright]
 include = ["src", "tests"]
