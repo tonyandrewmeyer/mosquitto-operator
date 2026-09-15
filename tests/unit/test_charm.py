@@ -1861,3 +1861,29 @@ def test_an_install_failure_blocks_rather_than_erroring_the_hook(
     assert out.unit_status == testing.BlockedStatus(
         'could not install Mosquitto — add-apt-repository did not finish within 300s'
     )
+
+
+def test_removing_the_extra_unit_returns_the_charm_to_active(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """Peer relation-departed is the only event the surviving unit gets.
+
+    The departing unit is still listed in `relation.units` while that hook runs, so a
+    scale check that counted it would leave the charm blocked with nothing left to
+    wake it — which is exactly what happened on Juju 4.0.
+    """
+    extra = testing.PeerRelation('mosquitto-peers', peers_data={1: {}})
+    state = testing.State(leader=True, relations={extra}, model=testing.Model(type='lxd'))
+
+    blocked = ctx.run(ctx.on.relation_changed(extra), state)
+    assert isinstance(blocked.unit_status, testing.BlockedStatus)
+    assert 'does not cluster' in blocked.unit_status.message
+
+    out = ctx.run(
+        ctx.on.relation_departed(extra, remote_unit=1),
+        dataclasses.replace(blocked),
+    )
+
+    assert out.unit_status == testing.ActiveStatus(
+        'ready — integrate a certificate authority to enable TLS'
+    )

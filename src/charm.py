@@ -49,6 +49,10 @@ class MosquittoCharm(ops.CharmBase):
         self._exporter_error: str | None = None
         self._bridge_error: str | None = None
         self._install_error: str | None = None
+        # The unit leaving on a peer relation-departed event. It is still listed in
+        # `relation.units` while that hook runs, so counting units without excluding it
+        # would keep the charm blocked — and nothing else would wake it.
+        self._departing_unit: ops.Unit | None = None
 
         self._tracing = ops_tracing.Tracing(
             self, 'charm-tracing', ca_relation_name='receive-ca-cert'
@@ -83,7 +87,7 @@ class MosquittoCharm(ops.CharmBase):
         framework.observe(self.on.update_status, self._on_update_status)
         framework.observe(self.on.secret_changed, self._on_reconcile)
         framework.observe(self.on[PEER].relation_changed, self._on_reconcile)
-        framework.observe(self.on[PEER].relation_departed, self._on_reconcile)
+        framework.observe(self.on[PEER].relation_departed, self._on_peer_departed)
         framework.observe(self.on['data'].storage_attached, self._on_reconcile)
         framework.observe(self.certificates.on.certificate_available, self._on_reconcile)
         # The certificates library only tells us when a certificate arrives. Losing the
@@ -342,6 +346,17 @@ class MosquittoCharm(ops.CharmBase):
         """Bring the broker into line with the charm's desired state."""
         self._reconcile()
 
+    def _on_peer_departed(self, event: ops.RelationDepartedEvent) -> None:
+        """Reconcile after a peer unit leaves.
+
+        This is the only event the remaining unit gets when an extra unit is removed:
+        the departing unit's relation-broken fires on the departing unit, not here. So
+        if the scale check still counted the departing unit, the charm would stay
+        blocked with nothing left to wake it.
+        """
+        self._departing_unit = event.departing_unit
+        self._reconcile()
+
     def _on_client_departed(self, event: mqtt.MQTTClientDepartedEvent) -> None:
         """Remove the user that belonged to a departing client."""
         users = self._load_users()
@@ -528,10 +543,15 @@ class MosquittoCharm(ops.CharmBase):
         up front instead.
         """
         relation = self._peers
-        if relation is not None and relation.units:
+        others = (
+            {unit for unit in relation.units if unit != self._departing_unit}
+            if relation is not None
+            else set()
+        )
+        if others:
             return (
                 f'Mosquitto does not cluster, so this charm runs one unit; '
-                f'{len(relation.units) + 1} are deployed. Remove the extra units with '
+                f'{len(others) + 1} are deployed. Remove the extra units with '
                 f'`juju remove-unit`, and integrate separate Mosquitto applications on '
                 f'`upstream` if you need more than one broker.'
             )
