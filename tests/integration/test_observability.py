@@ -76,20 +76,26 @@ def cos_agent_data(juju: jubilant.Juju) -> dict[str, object]:
     """What the charm published on the `cos-agent` relation.
 
     The cos_agent library puts everything — scrape jobs, alert rules and dashboards —
-    into one JSON blob in the unit databag.
+    into one JSON blob under `config` in the unit databag.
+
+    Read with `relation-get` on the unit rather than with `juju show-unit`: for the
+    principal side of a *subordinate* relation, `show-unit` reports the local unit as
+    `{"in-scope": false, "data": null}` even when the databag is populated, so a test
+    built on it blames the charm for something it did correctly.
     """
     # The charm publishes on relation-joined, which the principal only sees once the
-    # subordinate's unit exists. `test_deploy` waits for that, but the databag can still
-    # take a moment to settle, so give it a little room rather than failing on a race.
+    # subordinate's unit exists. `test_deploy` waits for that, but give the databag a
+    # little room to settle rather than failing on a race.
     deadline = time.monotonic() + 120
     while True:
-        info = juju.show_unit(UNIT)
-        for relation in info.relation_info:
-            if relation.endpoint != 'cos-agent':
-                continue
-            data = (relation.local_unit.data if relation.local_unit else None) or {}
-            if 'config' in data:
-                return json.loads(data['config'])
+        relation_id = juju.exec('relation-ids cos-agent', unit=UNIT, wait=60).stdout.strip()
+        if relation_id:
+            raw = juju.exec(
+                f'relation-get -r {relation_id} --format=json - {UNIT}', unit=UNIT, wait=60
+            ).stdout
+            databag = json.loads(raw) if raw.strip() else {}
+            if 'config' in databag:
+                return json.loads(databag['config'])
         if time.monotonic() > deadline:
             raise AssertionError(
                 'the charm published nothing on the cos-agent relation within 120s'
