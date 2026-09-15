@@ -120,6 +120,7 @@ class FakeMosquitto:
         self.restored: list[pathlib.Path] = []
         # Knobs the tests turn to make the machine misbehave.
         self.installs_succeed = True
+        self.install_error: str | None = None
         self.start_works = True
         self.health: tuple[bool, str] = (True, 'ok')
         self.sys_tree: dict[str, str] = {'$SYS/broker/version': 'mosquitto 2.0.18'}
@@ -153,6 +154,8 @@ class FakeMosquitto:
     def install(self, install_source: str, channel: str = 'latest/stable') -> None:
         self.calls.append('install')
         self.installs.append((install_source, channel))
+        if self.install_error is not None:
+            raise mosquitto.InstallError(self.install_error)
         if self.version is None and self.installs_succeed:
             self.version = '2.0.18'
 

@@ -1838,3 +1838,26 @@ def test_a_rejected_configuration_is_taken_back_off_disk(
 
     assert fake.extra_config == '', 'the rejected fragment was left on disk'
     assert 'restore_fragments' in fake.calls
+
+
+def test_an_install_failure_blocks_rather_than_erroring_the_hook(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """Reaching Launchpad or the archive is not something the charm can promise.
+
+    A slow mirror, or a PPA that will not answer within the timeout, should leave a
+    blocked unit saying so — not a hook traceback and a unit needing `juju resolve`.
+    """
+    fake.version = None
+    fake.install_error = 'add-apt-repository did not finish within 300s'
+    state = testing.State(
+        relations={testing.PeerRelation('mosquitto-peers')},
+        leader=True,
+        model=testing.Model(type='lxd'),
+    )
+
+    out = ctx.run(ctx.on.config_changed(), state)
+
+    assert out.unit_status == testing.BlockedStatus(
+        'could not install Mosquitto — add-apt-repository did not finish within 300s'
+    )

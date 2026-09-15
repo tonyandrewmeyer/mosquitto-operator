@@ -48,6 +48,7 @@ class MosquittoCharm(ops.CharmBase):
         # the status rather than only in the log.
         self._exporter_error: str | None = None
         self._bridge_error: str | None = None
+        self._install_error: str | None = None
 
         self._tracing = ops_tracing.Tracing(
             self, 'charm-tracing', ca_relation_name='receive-ca-cert'
@@ -378,26 +379,15 @@ class MosquittoCharm(ops.CharmBase):
             return
 
         paths = mosquitto.paths(settings.install_source)
-        previous = self._previous_install_source()
-        if previous is not None and previous != settings.install_source:
-            logger.info('Install source changed from %s to %s.', previous, settings.install_source)
-            self.unit.status = ops.MaintenanceStatus('changing install source')
-            mosquitto.install(settings.install_source, settings.package_channel)
-            mosquitto.migrate_state(mosquitto.paths(previous), paths)
-            # Mosquitto 2.1 hashes passwords with argon2id, which 2.0 cannot read, so a
-            # password file carried across a version change may be unusable. The charm
-            # holds every password in a Juju secret, so the cheapest correct thing is to
-            # throw the file away and let the reconcile below write a fresh one.
-            paths.password_file.unlink(missing_ok=True)
-        self._remember_install_source(settings.install_source)
-
-        version = mosquitto.get_version(settings.install_source)
-        if version is None:
-            logger.info('Mosquitto is not installed yet; installing.')
-            mosquitto.install(settings.install_source, settings.package_channel)
-            version = mosquitto.get_version(settings.install_source)
-        if version is not None:
-            self.unit.set_workload_version(version)
+        try:
+            version = self._install(settings, paths)
+        except mosquitto.InstallError as e:
+            # Installing needs Launchpad or the archive to answer, which is not
+            # something the charm can promise. Block with the reason and try again on
+            # the next event, rather than ending the hook in a traceback.
+            self._install_error = str(e)
+            logger.error('Could not install Mosquitto: %s', e)
+            return
 
         mosquitto.ensure_directories(paths)
 
@@ -496,6 +486,37 @@ class MosquittoCharm(ops.CharmBase):
             self._exporter_error = str(e)
             logger.error('The metrics exporter would not start: %s', e)
         self._publish_mqtt(settings, material is not None)
+
+    def _install(self, settings: config.MosquittoConfig, paths: mosquitto.Paths) -> str | None:
+        """Make sure the right Mosquitto is installed, migrating if the source changed.
+
+        Returns:
+            The installed version, or None if it still could not be determined.
+
+        Raises:
+            mosquitto.InstallError: If the packages could not be installed.
+        """
+        previous = self._previous_install_source()
+        if previous is not None and previous != settings.install_source:
+            logger.info('Install source changed from %s to %s.', previous, settings.install_source)
+            self.unit.status = ops.MaintenanceStatus('changing install source')
+            mosquitto.install(settings.install_source, settings.package_channel)
+            mosquitto.migrate_state(mosquitto.paths(previous), paths)
+            # Mosquitto 2.1 hashes passwords with argon2id, which 2.0 cannot read, so a
+            # password file carried across a version change may be unusable. The charm
+            # holds every password in a Juju secret, so the cheapest correct thing is to
+            # throw the file away and let the reconcile write a fresh one.
+            paths.password_file.unlink(missing_ok=True)
+        self._remember_install_source(settings.install_source)
+
+        version = mosquitto.get_version(settings.install_source)
+        if version is None:
+            logger.info('Mosquitto is not installed yet; installing.')
+            mosquitto.install(settings.install_source, settings.package_channel)
+            version = mosquitto.get_version(settings.install_source)
+        if version is not None:
+            self.unit.set_workload_version(version)
+        return version
 
     def _scale_problem(self) -> str | None:
         """Why this deployment cannot work, if it cannot.
@@ -866,7 +887,12 @@ class MosquittoCharm(ops.CharmBase):
         paths = mosquitto.paths(settings.install_source)
 
         if mosquitto.get_version(settings.install_source) is None:
-            event.add_status(ops.MaintenanceStatus('installing Mosquitto'))
+            if self._install_error is not None:
+                event.add_status(
+                    ops.BlockedStatus(f'could not install Mosquitto — {self._install_error}')
+                )
+            else:
+                event.add_status(ops.MaintenanceStatus('installing Mosquitto'))
             return
         if not mosquitto.is_running(paths):
             reason = self._service_error or 'check `juju debug-log` and the unit journal'
