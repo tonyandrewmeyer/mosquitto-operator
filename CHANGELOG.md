@@ -81,6 +81,12 @@ description of what the charm does rather than a list of changes to it.
   matching certificate — and because no issued certificate matched the new
   attributes any more, the TLS listeners disappeared at the next
   reconfiguration.
+- A failed install during the `install` or `upgrade-charm` hook now blocks the
+  unit with the reason, as it already did everywhere else, instead of ending the
+  hook in a traceback. A first deploy against a slow PPA is where this happens.
+- A unit that is not the leader no longer errors its hook when a client's
+  relation departs, or when it reconciles before leadership is settled. It waits
+  instead, and `leader-elected` is now observed so that something wakes it.
 - Changing `bridge-topics` now republishes the request to the upstream broker,
   so the new topics are actually granted. The bridge previously forwarded
   topics the upstream broker had never granted it, and carried no traffic on

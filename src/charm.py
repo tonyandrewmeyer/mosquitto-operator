@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class LeadershipError(Exception):
+    """Raised when a follower unit is asked to do something only the leader can."""
+
+
 PEER = 'mosquitto-peers'
 USERS_KEY = 'users'
 SECRET_LABEL = 'mqtt-user-{username}'  # noqa: S105 — a label template, not a secret.
@@ -83,6 +88,9 @@ class MosquittoCharm(ops.CharmBase):
         framework.observe(self.on.stop, self._on_stop)
         framework.observe(self.on.remove, self._on_remove)
         framework.observe(self.on.config_changed, self._on_reconcile)
+        # The charm cannot create the credentials it needs until leadership is settled,
+        # so a unit that reconciled before then has to be woken again afterwards.
+        framework.observe(self.on.leader_elected, self._on_reconcile)
         framework.observe(self.on.upgrade_charm, self._on_upgrade)
         framework.observe(self.on.update_status, self._on_update_status)
         framework.observe(self.on.secret_changed, self._on_reconcile)
@@ -257,6 +265,13 @@ class MosquittoCharm(ops.CharmBase):
         try:
             secret = self.model.get_secret(label=label)
         except ops.SecretNotFoundError:
+            if not self.unit.is_leader():
+                # Only the leader can create an application-owned secret. A follower
+                # asking for a password it has never seen is a transient state during
+                # a leadership change, not something to error the hook over.
+                raise LeadershipError(
+                    f'only the leader can create the credentials for {username}'
+                ) from None
             password = mosquitto.generate_password()
             self.app.add_secret(
                 {'username': username, 'password': password},
@@ -308,7 +323,16 @@ class MosquittoCharm(ops.CharmBase):
         if settings is None:
             return
         self.unit.status = ops.MaintenanceStatus('installing Mosquitto')
-        mosquitto.install(settings.install_source, settings.package_channel)
+        try:
+            mosquitto.install(settings.install_source, settings.package_channel)
+        except mosquitto.InstallError as e:
+            # A slow PPA or an archive that will not answer is not something the charm
+            # can promise, and it is exactly what `install` runs into on a first deploy.
+            # Block with the reason, as the reconcile path does, rather than ending the
+            # hook in a traceback the operator has to go and find in the log.
+            self._install_error = str(e)
+            logger.error('Could not install Mosquitto: %s', e)
+            return
         paths = mosquitto.paths(settings.install_source)
         mosquitto.ensure_directories(paths)
         self._remember_install_source(settings.install_source)
@@ -335,7 +359,13 @@ class MosquittoCharm(ops.CharmBase):
         """Reinstall as needed and reconcile after a charm upgrade."""
         settings = self._config
         if settings is not None:
-            mosquitto.install(settings.install_source, settings.package_channel)
+            try:
+                mosquitto.install(settings.install_source, settings.package_channel)
+            except mosquitto.InstallError as e:
+                # Reconcile anyway: the broker is most likely still installed and
+                # running from before the upgrade, and this must not error the hook.
+                self._install_error = str(e)
+                logger.error('Could not install Mosquitto: %s', e)
         self._reconcile()
 
     def _on_update_status(self, event: ops.UpdateStatusEvent) -> None:
@@ -359,6 +389,12 @@ class MosquittoCharm(ops.CharmBase):
 
     def _on_client_departed(self, event: mqtt.MQTTClientDepartedEvent) -> None:
         """Remove the user that belonged to a departing client."""
+        if not self.unit.is_leader():
+            # The user list is application relation data and the passwords are
+            # application-owned secrets, so only the leader can do any of this. The
+            # leader gets this event too, and reconciles the same removal.
+            self._reconcile()
+            return
         users = self._load_users()
         owner = f'relation:{event.relation.id}'
         for username, record in list(users.items()):
@@ -415,7 +451,13 @@ class MosquittoCharm(ops.CharmBase):
 
         mosquitto.ensure_directories(paths)
 
-        users, rules = self._desired_users()
+        try:
+            users, rules = self._desired_users()
+        except LeadershipError as e:
+            # Leadership is not settled yet. The leader-elected that follows brings us
+            # straight back here, so there is nothing to do but wait for it.
+            logger.info('Not configuring the broker yet: %s.', e)
+            return
         changes = [
             mosquitto.write_password_file(paths, users),
             mosquitto.write_acl_file(paths, rules),
@@ -1086,7 +1128,11 @@ class MosquittoCharm(ops.CharmBase):
             event.fail('The charm configuration is invalid; fix that first.')
             return
         paths = mosquitto.paths(settings.install_source)
-        password = self._password_for(mosquitto.HEALTH_USER)
+        try:
+            password = self._password_for(mosquitto.HEALTH_USER)
+        except LeadershipError:
+            event.fail('The broker is not configured yet; try again in a moment.')
+            return
         # The TLS listener only exists once a certificate authority has issued, so
         # checking it otherwise reports a failure for something that was never
         # configured.
@@ -1139,12 +1185,17 @@ class MosquittoCharm(ops.CharmBase):
         if settings is None or not settings.port:
             event.fail('The plaintext listener is needed to read the $SYS tree.')
             return
+        try:
+            password = self._password_for(mosquitto.METRICS_USER)
+        except LeadershipError:
+            event.fail('The broker is not configured yet; try again in a moment.')
+            return
         snapshot = mosquitto.sys_snapshot(
             mosquitto.paths(settings.install_source),
             host='127.0.0.1',
             port=settings.port,
             username=mosquitto.METRICS_USER,
-            password=self._password_for(mosquitto.METRICS_USER),
+            password=password,
         )
         if not snapshot:
             event.fail(

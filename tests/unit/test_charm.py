@@ -1282,6 +1282,57 @@ def test_a_departing_client_loses_its_user(
     ]
 
 
+def test_a_departing_client_on_a_follower_does_not_error(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Removing a user is application state, so only the leader may do it.
+
+    The leader gets the same event and does the removal; a follower attempting it would
+    write application relation data and remove an application-owned secret, both of
+    which end the hook in an error.
+    """
+    relation = testing.Relation(
+        'mqtt',
+        remote_app_name='telemetry',
+        remote_app_data=requirer_databag(('sensors/#', 'read')),
+    )
+    username = f'telemetry-{relation.id}'
+    state_in = make_state(
+        leader=False,
+        peer=peer_relation({username: {'owner': f'relation:{relation.id}', 'acl': []}}),
+        relations=[relation],
+        secrets=[user_secret(username, 'hunter2')],
+    )
+
+    state_out = ctx.run(ctx.on.relation_broken(relation), state_in)
+
+    assert stored_users(state_out) == {username: {'owner': f'relation:{relation.id}', 'acl': []}}
+
+
+def test_a_follower_waits_for_leadership_before_configuring(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The charm's own users live in application-owned secrets, which need the leader.
+
+    A unit that reconciles before leadership is settled has to wait rather than error,
+    and the leader-elected that follows brings it straight back.
+    """
+    ctx.run(ctx.on.config_changed(), make_state(leader=False))
+
+    assert not fake.users
+    assert any('Not configuring the broker yet' in line.message for line in ctx.juju_log)
+
+
+def test_leader_elected_reconciles(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Nothing else would wake a unit that gave up waiting for leadership."""
+    ctx.run(ctx.on.leader_elected(), make_state())
+
+    assert fake.running
+    assert mosquitto.HEALTH_USER in fake.users
+
+
 def test_a_follower_publishes_nothing(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
@@ -1902,13 +1953,15 @@ def test_a_rejected_configuration_is_taken_back_off_disk(
     assert 'restore_fragments' in fake.calls
 
 
+@pytest.mark.parametrize('event_name', ['config_changed', 'install', 'upgrade_charm'])
 def test_an_install_failure_blocks_rather_than_erroring_the_hook(
-    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm], event_name: str
 ):
     """Reaching Launchpad or the archive is not something the charm can promise.
 
     A slow mirror, or a PPA that will not answer within the timeout, should leave a
     blocked unit saying so — not a hook traceback and a unit needing `juju resolve`.
+    `install` is where a first deploy meets a slow PPA, so it matters most there.
     """
     fake.version = None
     fake.install_error = 'add-apt-repository did not finish within 300s'
@@ -1918,7 +1971,7 @@ def test_an_install_failure_blocks_rather_than_erroring_the_hook(
         model=testing.Model(type='lxd'),
     )
 
-    out = ctx.run(ctx.on.config_changed(), state)
+    out = ctx.run(getattr(ctx.on, event_name)(), state)
 
     assert out.unit_status == testing.BlockedStatus(
         'could not install Mosquitto — add-apt-repository did not finish within 300s'
