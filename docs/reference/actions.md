@@ -107,14 +107,26 @@ publishing a message to a private topic and reading it back at QoS 1. A broker
 can accept TCP connections while being unable to serve any of them, so this is a
 real round trip rather than a port check.
 
+The WebSocket listeners are checked differently: the Mosquitto client tools speak
+MQTT over TCP only, so those go as far as the HTTP upgrade Mosquitto answers for
+`mqtt` rather than through a round trip. That still catches a build without
+WebSocket support, a listener that is not up, and TLS material the broker cannot
+read.
+
+Listeners that are not configured are skipped, so `all` on a plaintext-only
+deployment checks only the plaintext listener. Asking for a TLS listener that has
+no certificate yet fails, rather than passing quietly.
+
 | Parameter | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `listener` | string | no | `all` | Which listener to check: `plain`, `tls` or `all`. |
+| `listener` | string | no | `all` | Which listener to check: `plain`, `tls`, `websockets`, `websockets-tls` or `all`. |
 
 | Result | Meaning |
 | --- | --- |
 | `plain` | `ok: …` or `failed: …` for the plaintext listener. |
 | `tls` | The same for the TLS listener. |
+| `websockets` | The same for the plaintext WebSocket listener. |
+| `websockets-tls` | The same for the WebSocket-over-TLS listener. |
 
 Only the listeners that exist are checked: with `all` and no certificate, the
 results contain `plain` alone. Asking for `tls` when there is no certificate

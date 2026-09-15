@@ -51,6 +51,33 @@ jobs:
       - name: Static type check
         run: tox -e static
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read        # read the repository under test; nothing else
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Set up tox and tox-uv
+        run: uv tool install tox --with tox-uv
+
+      # Audits the locked *runtime* graph, which is what ships inside the .charm
+      # and runs as root on the unit. Advisories that are genuinely unreachable
+      # are ignored one at a time in tox.ini, each with the analysis that says
+      # why; this job fails on anything else, including a new advisory against a
+      # package that was fine yesterday.
+      - name: Audit the locked runtime dependencies
+        run: tox -e audit
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -150,9 +177,46 @@ jobs:
         # `entrypoint` is ignored because charmcraft's own linter cannot read the
         # dispatch script charmcraft's own uv plugin generates: it compares against the
         # literal string '${dispatch_path}' rather than expanding it, so it reports a
-        # missing entrypoint for every uv-built charm. Every other linter still runs,
-        # and `analyse` exits non-zero if any of them fails.
+        # missing entrypoint for every uv-built charm.
+        #
+        # That has a knock-on worth being honest about: failing to find the entrypoint
+        # is also how `analyse` works out the charm's language and framework, so it
+        # reports both as unknown and the `ops-main-call` check comes out
+        # non-applicable rather than passing. So this step is really checking the
+        # framework-independent linters only. The step below is the framework check
+        # `analyse` is not making.
         run: charmcraft analyse --ignore entrypoint ./*.charm
+
+      # What `ops-main-call` would have checked, if `analyse` could see the charm as a
+      # charm: that the packed artefact's entrypoint is importable and hands the charm
+      # class to `ops.main`. A charm that fails this deploys and then errors on its
+      # very first hook.
+      - name: Check the packed entrypoint reaches ops.main
+        run: |
+          mkdir -p ./unpacked
+          unzip -q ./*.charm -d ./unpacked
+          python3 - <<'PY'
+          import ast
+          import pathlib
+
+          source = pathlib.Path('unpacked/src/charm.py')
+          tree = ast.parse(source.read_text())
+          calls = [
+              node
+              for node in ast.walk(tree)
+              if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute)
+              and node.func.attr == 'main'
+          ]
+          assert calls, f'{source} never calls ops.main()'
+          argument = calls[0].args[0]
+          assert isinstance(argument, ast.Name), 'ops.main() was not given a charm class'
+          print(f'{source} calls ops.main({argument.id})')
+
+          dispatch = pathlib.Path('unpacked/dispatch')
+          assert dispatch.is_file() and dispatch.read_text().strip(), 'the charm has no dispatch'
+          print('dispatch is present')
+          PY
 
       - name: Upload the packed charm
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

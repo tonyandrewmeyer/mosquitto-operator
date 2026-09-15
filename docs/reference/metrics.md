@@ -3,7 +3,12 @@
 Mosquitto has no Prometheus endpoint; it publishes statistics to the
 `$SYS/broker/#` topic tree every `sys-interval` seconds. The charm ships a small
 Python exporter that subscribes to that tree and serves it as Prometheus text on
-`metrics-port` (9234 by default), bound to the unit's private address.
+`metrics-port` (9234 by default), bound to `127.0.0.1`.
+
+Loopback is where it is scraped from: the COS machine collector is a subordinate
+on the same machine, and the scrape target the `cos_agent` library builds for it
+is `localhost:<metrics-port>`. Nothing off the unit has any business reading the
+`$SYS` tree, which names every client id and every topic count on the broker.
 
 The metric names are those of
 [`sapcc/mosquitto-exporter`](https://github.com/sapcc/mosquitto-exporter), so
@@ -69,10 +74,11 @@ does and what existing dashboards expect.
 
 | Metric | Meaning |
 | --- | --- |
-| `mosquitto_up` | 1 while `$SYS` messages are arriving, 0 once nothing has arrived for 60 seconds. |
+| `mosquitto_up` | 1 while `$SYS` messages are arriving, 0 once nothing has arrived for three `sys-interval` periods (60 seconds at the default, and never less). |
 | `mosquitto_broker_info` | Always 1, carrying the broker version in a `version` label. |
 | `mosquitto_bridge_state` | Per bridge, from `$SYS/broker/connection/<name>/state`: 1 up, 0 down, with the bridge name in a `bridge` label. |
 | `mosquitto_exporter_build_info` | Always 1, carrying the exporter version in a `version` label. |
+| `mosquitto_max_connections` | The configured `max-connections`, so that alerts can be written against the limit in force rather than against a number. Absent when `max-connections` is -1. |
 
 Deliberately not exported: `$SYS/broker/timestamp` (a build string),
 `$SYS/broker/clients/active` and `$SYS/broker/clients/inactive` (deprecated
@@ -91,16 +97,17 @@ model or application matchers.
 | `MosquittoDown` | `mosquitto_up == 0` | 2m | critical |
 | `MosquittoExporterDown` | `up == 0` | 5m | warning |
 | `MosquittoRestarted` | `resets(broker_uptime[15m]) > 0` | 5m | warning |
-| `MosquittoConnectionsNearLimit` | `broker_clients_connected > 870` | 10m | warning |
+| `MosquittoConnectionsNearLimit` | `broker_clients_connected / mosquitto_max_connections > 0.85` | 10m | warning |
 | `MosquittoDisconnectedSessionsGrowing` | `deriv(broker_clients_disconnected[6h]) > 0.01 and broker_clients_disconnected > 1000` | 1h | warning |
 | `MosquittoRetainedMessagesGrowing` | `deriv(broker_retained_messages_count[24h]) > 0.05 and broker_retained_messages_count > 10000` | 2h | warning |
 | `MosquittoHeapGrowing` | `deriv(broker_heap_current[6h]) > 1e4 and broker_heap_current > 5e8` | 30m | warning |
 | `MosquittoBridgeDown` | `mosquitto_bridge_state == 0` | 5m | critical |
 
-Each rule's annotations say what to do about it. Two thresholds assume the
-defaults and want retuning if you change them: `MosquittoConnectionsNearLimit` is
-85% of a `max-connections` of 1024, and `MosquittoHeapGrowing` assumes a broker
-whose normal heap is well under 500 MB.
+Each rule's annotations say what to do about it. One threshold still assumes a
+default and wants retuning if you change it: `MosquittoHeapGrowing` assumes a
+broker whose normal heap is well under 500 MB. `MosquittoConnectionsNearLimit`
+follows `max-connections` on its own, because the exporter publishes the
+configured limit alongside the connection count.
 
 `MosquittoMessagesDropped` is the one that matters most: it is the only metric
 that directly means data has been lost, rather than that something might go wrong

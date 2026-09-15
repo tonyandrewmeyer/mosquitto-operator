@@ -62,6 +62,20 @@ snapd owns and regenerates those units — so `open-file-limit` has no effect �
 it holds the snap, so snapd will not refresh the broker outside a maintenance
 window of your choosing.
 
+The declared `data` storage is not used on this layout: a strictly confined snap
+cannot see `/var/lib/mosquitto`, so the persistence database and the backups live
+under the snap's common directory on the root disk instead. If Juju-managed
+durability for the database matters to you, use `archive` or `ppa`.
+
+## The `data` storage
+
+The `data` filesystem storage is mounted at `/var/lib/mosquitto` on the deb
+layouts, and carries the persistence database and the default backup directory.
+The broker holds the database open for as long as it is running, so the charm
+stops the broker when Juju detaches the storage — Juju blocks the detach until
+that hook returns, which is the only chance to have the database written out
+where the volume will carry it.
+
 ## Reading files on the unit
 
 `/etc/mosquitto/certs` and `/var/lib/mosquitto` are mode `0700` and owned by the

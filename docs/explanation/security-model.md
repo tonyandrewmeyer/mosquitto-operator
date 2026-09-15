@@ -131,9 +131,11 @@ snap's strict confinement does the same job.
 
 ## What the charm does not do
 
-- **It does not open ports.** The charm declares no opened ports to Juju, so
-  `juju expose` does not open the listeners. On a cloud that firewalls machines,
-  reaching the broker from outside the model is your own arrangement.
+- **It does not expose the application for you.** The charm *does* declare its
+  listeners to Juju with `unit.set_ports()`, so `juju expose mosquitto` opens
+  exactly the MQTT and WebSocket ports that are configured and no others — but it
+  never exposes the application itself. The metrics port is deliberately left out
+  of that declaration: it is bound to loopback, for the collector beside it.
 - **It does not manage `/etc/hosts.allow`.** Mosquitto is linked against
   `libwrap`, so those rules still apply if you write them.
 - **It does not stop you turning safety off.** `allow-anonymous=true` works, and

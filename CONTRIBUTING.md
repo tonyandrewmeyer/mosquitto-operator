@@ -101,7 +101,15 @@ safe to run on a laptop with no controller and no Mosquitto installed.
   they are the only tests that cover `src/mosquitto.py` against real apt and
   real systemd.
 - **Integration tests** use [Jubilant](https://documentation.ubuntu.com/jubilant/)
-  and `pytest-jubilant`, and need a bootstrapped controller.
+  and `pytest-jubilant`, and need a bootstrapped controller. Each file gets its
+  own model, so `tests/integration/test_snap.py` deploys onto the snap while the
+  rest use the archive.
+
+`tox -e audit` runs `pip-audit` over the locked *runtime* dependencies — the
+graph that ships inside the `.charm` and runs as root on the unit — and CI runs
+it on every pull request. An advisory that is genuinely unreachable from this
+charm can be ignored in `tox.ini`, but only alongside the analysis that says
+why it is unreachable and what would make it reachable again.
 
 ### Running the integration tests
 

@@ -202,6 +202,42 @@ def test_extra_config_is_applied(juju: jubilant.Juju):
     juju.wait(jubilant.all_active)
 
 
+def test_a_configuration_the_broker_dies_on_is_rolled_back(juju: jubilant.Juju):
+    """The charm's own validation cannot catch everything, and 2.0 has no dry run.
+
+    `mosquitto --test-config` arrived in 2.1, so on the archive build a directive the
+    broker only rejects at startup is found out the hard way: `systemctl reload`
+    reports success and the broker exits. Leaving that configuration on disk is not
+    neutral either — the packaged logrotate fragment SIGHUPs the broker every night,
+    so a unit that was merely blocked at teatime is down by morning.
+    """
+    unit = f'{APP}/0'
+    juju.run(unit, 'set-password', {'username': 'dave', 'password': 'dave-password'})
+    juju.run(unit, 'grant', {'username': 'dave', 'topic': 'sensors/#'})
+    juju.wait(jubilant.all_active)
+
+    # Syntactically fine, and refused at startup: `persistence_location` is already
+    # set by the charm, and Mosquitto refuses a directive that appears twice.
+    juju.config(APP, {'extra-config': 'persistence_location /var/lib/mosquitto/'})
+    status = juju.wait(jubilant.all_blocked, timeout=600)
+
+    message = status.apps[APP].units[unit].workload_status.message
+    assert 'not applied' in message or 'not running' in message
+    # The broker is back on the configuration it was serving, not down with the one
+    # that killed it, and a client that was working still works.
+    assert helpers.service_is_running(juju, unit)
+    assert helpers.round_trip(juju, unit, 'dave', 'dave-password', 'sensors/x')
+    extra = helpers.exec_allowed_to_fail(
+        juju, unit, '/bin/cat /etc/mosquitto/conf.d/99-charm-extra.conf'
+    )
+    assert extra is None or 'persistence_location' not in extra.stdout
+
+    juju.config(APP, {'extra-config': ''})
+    juju.wait(jubilant.all_active, timeout=600)
+    juju.run(unit, 'remove-user', {'username': 'dave'})
+    juju.wait(jubilant.all_active)
+
+
 def test_backup_and_restore(juju: jubilant.Juju):
     unit = f'{APP}/0'
     backup = juju.run(unit, 'create-backup')
@@ -261,18 +297,13 @@ def test_removing_the_extra_unit_returns_the_application_to_active(juju: jubilan
     `juju remove-unit` on its own waits for that storage indefinitely rather than
     saying so.
     """
-    version = juju.status().model.version
     juju.remove_unit(f'{APP}/1', destroy_storage=True)
 
-    if version.startswith('4.'):
-        # Juju 4.x does not clean up *peer* relation membership when a unit is
-        # removed: `relation-list` on the surviving unit still returns the removed one
-        # twenty-five minutes later, and `mosquitto-peers-relation-departed` never
-        # fires. Ordinary relations are unaffected on the same versions. The charm's
-        # only source of truth for how many units exist is exactly that peer relation,
-        # so it cannot recover, and the charm-side fix for this (not counting the
-        # departing unit) has no event to run in. Reproduced on 4.0.14, 4.1-beta3 and
-        # 4.2-beta1, correct on 3.6.28 — see contrib/juju-peer-departed-reproducer/.
-        pytest.skip('Juju 4.0 does not remove the departed unit from the peer relation')
-
+    # No version skip. Juju 4.x does not clean up *peer* relation membership when a
+    # unit is removed -- `relation-list` on the surviving unit still returns the
+    # removed one twenty-five minutes later, and `mosquitto-peers-relation-departed`
+    # never fires, which left the charm blocked for ever when it counted peers (see
+    # contrib/juju-peer-departed-reproducer/). The charm takes the unit count from
+    # goal state instead, which is correct on both, and reconciles it on
+    # `update-status` as well as on the departed hook that 3.6 does send.
     juju.wait(jubilant.all_active, timeout=900)

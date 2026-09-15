@@ -18,6 +18,7 @@ import json
 import logging
 import pathlib
 import time
+from typing import Any, cast
 
 import helpers
 import jubilant
@@ -62,10 +63,15 @@ def the_collector_has_joined(status: jubilant.Status) -> bool:
 
 
 def metrics(juju: jubilant.Juju) -> str:
-    """Scrape the exporter the way the collector does."""
-    address = juju.status().apps[APP].units[UNIT].public_address
+    """Scrape the exporter the way the collector does.
+
+    The collector is a subordinate on this very machine, and the scrape target the
+    cos_agent library builds for it is `localhost:<metrics-port>`. Scraping the unit's
+    own address instead would pass against an exporter the collector cannot reach,
+    which is exactly the bug this test used to hide.
+    """
     result = juju.exec(
-        f'/usr/bin/curl -sS --max-time 20 http://{address}:{METRICS_PORT}/metrics',
+        f'/usr/bin/curl -sS --max-time 20 http://localhost:{METRICS_PORT}/metrics',
         unit=UNIT,
         wait=90,
     )
@@ -127,12 +133,52 @@ def test_the_metrics_endpoint_serves_the_metrics_the_alerts_use(juju: jubilant.J
     assert 'broker_retained_messages_count' in scraped
 
 
-def test_the_exporter_binds_to_the_unit_address_not_loopback(juju: jubilant.Juju):
-    """The collector scrapes over the network, so loopback would serve nothing."""
+def test_the_exporter_binds_to_loopback_only(juju: jubilant.Juju):
+    """Where the collector scrapes, and nowhere else.
+
+    The scrape target is `localhost:<metrics-port>` and the collector runs on this
+    machine, so loopback is both sufficient and the whole of what should be reachable:
+    the `$SYS` tree names every client id and every topic count on the broker.
+    """
     address = juju.status().apps[APP].units[UNIT].public_address
     listening = juju.exec(f'/bin/sh -c "ss -ltn | grep {METRICS_PORT}"', unit=UNIT, wait=60).stdout
-    # Either the unit's own address, or every interface.
-    assert address in listening or '0.0.0.0' in listening  # noqa: S104
+
+    assert '127.0.0.1' in listening
+    assert address not in listening
+    assert '0.0.0.0' not in listening  # noqa: S104
+
+
+def test_the_metrics_port_is_not_reachable_from_off_the_unit(juju: jubilant.Juju):
+    """The exporter is for the collector beside it, not for anything in the model."""
+    address = juju.status().apps[APP].units[UNIT].public_address
+    reachable = helpers.exec_allowed_to_fail(
+        juju,
+        UNIT,
+        f'/usr/bin/curl -sS --max-time 10 http://{address}:{METRICS_PORT}/metrics',
+    )
+
+    assert reachable is None, 'the exporter answered on the unit address'
+
+
+def test_the_scrape_target_is_the_address_the_exporter_serves(juju: jubilant.Juju):
+    """The two halves of the metrics integration have to agree about the address.
+
+    They disagreed: the library emits `localhost`, and the charm bound the exporter to
+    the unit's private address, so the collector's scrape was refused every time while
+    every test still passed.
+    """
+    jobs = cast('list[dict[str, Any]]', cos_agent_data(juju)['metrics_scrape_jobs'])
+
+    targets = [
+        target for job in jobs for static in job['static_configs'] for target in static['targets']
+    ]
+
+    assert targets == [f'localhost:{METRICS_PORT}']
+
+
+def test_the_connection_ceiling_is_exported(juju: jubilant.Juju):
+    """The connection alert is a ratio against it, so a missing gauge never fires."""
+    assert 'mosquitto_max_connections' in metrics(juju)
 
 
 def test_the_scrape_job_reaches_the_collector(juju: jubilant.Juju):

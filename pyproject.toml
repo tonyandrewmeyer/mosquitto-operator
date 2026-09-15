@@ -55,6 +55,9 @@ integration = [
     "pytest~=9.1",
     "pytest-jubilant>=2.3,<3",
 ]
+audit = [
+    "pip-audit~=2.10",
+]
 
 [tool.uv]
 # Belt and braces alongside the absent `dev` group above: never sync a group

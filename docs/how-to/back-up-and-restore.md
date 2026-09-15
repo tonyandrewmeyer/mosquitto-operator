@@ -1,8 +1,15 @@
 # Back up and restore
 
-The charm can take a copy of everything needed to rebuild a broker: the
-persistence database, the password file, the ACL file, the rendered
-configuration fragments and the TLS material, as one tarball on the unit.
+The charm can take a copy of the broker's own state — the persistence database,
+the password file, the ACL file, the rendered configuration fragments and the TLS
+material — as one tarball on the unit.
+
+This is a snapshot of the *workload*, not a whole-application backup. The
+passwords themselves live in Juju secrets and the record of who should exist
+lives in the peer relation, so neither is in the tarball, and the charm rewrites
+the password and ACL files from those at the next reconciliation. Rebuilding from
+nothing means deploying the charm with the same configuration and restoring the
+tarball into it; see [What is not in the backup](#what-is-not-in-the-backup).
 
 ## Take a backup
 
@@ -15,7 +22,10 @@ path: /var/lib/mosquitto/backups/mosquitto-20260915T110402Z.tar.gz
 size: "18423"
 ```
 
-To write it somewhere else — another filesystem, a mounted share — pass a path:
+To write it somewhere else — another filesystem, a mounted share — pass a path.
+It must not already exist: the backup is written as root, and refusing to write
+through a symlink or over an existing file is what stops an operator who can run
+actions turning that into a way to overwrite anything on the machine.
 
 ```shell
 juju run mosquitto/0 create-backup path=/mnt/backups/mosquitto-nightly.tar.gz
@@ -68,6 +78,11 @@ juju run mosquitto/0 restore-backup path=/var/lib/mosquitto/backups/mosquitto-20
 This stops the broker, extracts the tarball, and starts it again. **Every client
 is disconnected**, and the action says so before it begins. It must run on the
 leader, because it changes state the whole application shares.
+
+The action always tries to start the broker again, whether or not the restore
+itself worked, and fails if it could not: a restore that left the broker down is
+reported as a failure rather than as `restored`, so it cannot look like a
+recovery while every client is still disconnected.
 
 A restored password file is the one from the backup, so users created since then
 no longer exist, and passwords changed since then are back to their older values.

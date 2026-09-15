@@ -62,10 +62,11 @@ description of what the charm does rather than a list of changes to it.
   vulnerable to CVE-2024-3935 through bridge topic remapping. Ubuntu 24.04
   ships 2.0.18.
 - Repository infrastructure: `pyproject.toml` and `tox.ini` driven entirely
-  from `uv.lock`, GitHub Actions CI (lint, unit, pack, and integration against
-  Juju 3.6 and 4.0), a zizmor workflow, Dependabot, pre-commit hooks, issue and
-  pull request templates, and the security, contributing, code-of-conduct and
-  changelog files.
+  from `uv.lock`, GitHub Actions CI (lint, unit, a dependency audit of the
+  locked runtime graph, pack, and integration against Juju 3.6 and 4.0), a
+  zizmor workflow, Dependabot, pre-commit hooks, issue and pull request
+  templates, and the security, contributing, code-of-conduct and changelog
+  files.
 
 ### Changed
 
@@ -75,6 +76,68 @@ description of what the charm does rather than a list of changes to it.
 
 ### Fixed
 
+- The metrics exporter listens on `127.0.0.1` rather than on the unit's private
+  address. The `cos_agent` library builds its scrape target as
+  `localhost:<metrics-port>` and the collector is a subordinate on the same
+  machine, so a socket bound to the private address refused every scrape it
+  made: the metrics integration collected nothing at all.
+- A configuration the broker accepts and then dies on, or one it keeps running
+  while breaking authentication or the ACL file, is taken back off disk and the
+  broker is put back on the one it was serving. Reconciliation now proves the
+  change with the same QoS 1 round trip `health-check` uses. The archive's 2.0
+  build has no `--test-config` to catch any of this first, and a rejected
+  configuration left on disk takes the broker down at the next logrotate SIGHUP
+  or reboot, hours after the operator walked away from a blocked unit.
+- Changing `package-channel` refreshes the snap, which is what the upgrade
+  documentation has always said it does. The charm holds the snap, so nothing
+  else ever moved it: the documented way to take a security update quietly did
+  nothing until some unrelated charm upgrade came along.
+- The unit count comes from Juju's goal state rather than from peer relation
+  membership. Juju 4.x never removes a departed unit from a *peer* relation and
+  sends no departed hook, so a deployment that was scaled to two units and back
+  stayed blocked for ever with nothing left to wake it.
+- `storage-detaching` stops the broker and the exporter. The persistence
+  database lives on that storage and the broker holds it open, so detaching
+  underneath a running broker either failed to unmount or lost everything since
+  the last autosave.
+- Mutating actions fail when the broker did not take the change, instead of
+  reporting success against a record only the charm can see. `pause` records
+  that the broker is paused only once it really is down — recording it first and
+  then failing to stop left the charm reporting a paused broker that was still
+  serving every client on it, through a flag that stopped every later
+  reconciliation from noticing.
+- `restore-backup` fails when the broker will not start on what was restored,
+  rather than reporting `restored` over a broker that is still down.
+- A configuration whose only listeners are TLS ones keeps the broker stopped
+  until a certificate arrives. Rendering it with no `listener` directive at all
+  did not disable the broker: Mosquitto 2.x answers that by opening its own
+  plaintext listener on loopback, which is what `port=0` asked it not to do.
+- TLS material and the bridge authority are removed when their integrations go,
+  rather than leaving a private key on a machine that no longer serves TLS and
+  sweeping it into every later backup.
+- The exporter's staleness window follows `sys-interval` — three intervals, and
+  never less than 60 seconds — so a broker with `sys-interval` above 60 no
+  longer flaps between up and down between publishes and pages on the critical
+  `MosquittoDown` alert while working perfectly well.
+- `MosquittoConnectionsNearLimit` is a ratio against the configured
+  `max-connections`, which the exporter now publishes as
+  `mosquitto_max_connections`, rather than a threshold of 870 tied to the
+  default.
+- `health-check` covers the WebSocket listeners, which were advertised in the
+  metadata and the relation endpoints with no way to check them at all: a
+  WebSocket-only deployment could be active with nothing having proved that its
+  only transport worked.
+- An archive build of Mosquitto without the ESM revision is named in the unit
+  status. The default install source has no standard security support, which was
+  documented but only where an operator who had already deployed would not look.
+- `open-file-limit` at or below `max-connections` is rejected. The broker would
+  start refusing connections before reaching the ceiling that was configured,
+  with `accept: Too many open files` in a log nobody reads as the only symptom.
+- An empty `password` for `set-password` is rejected rather than quietly
+  replaced with a generated one while the action reported `generated=false`.
+- `create-backup` opens its destination with `O_EXCL` and `O_NOFOLLOW`. The
+  action's own check that the path does not exist is a syscall earlier, and the
+  backup is written as root.
 - Changing `certificate-common-name`, `certificate-extra-sans-dns` or
   `certificate-organization` now sends a new certificate request. The charm
   previously left the old request in place, so the authority never issued a

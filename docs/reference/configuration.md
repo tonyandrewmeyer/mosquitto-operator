@@ -31,6 +31,12 @@ The **restart** column says what applying a change to that option costs:
 At least one listener must be enabled; a configuration where all four ports are 0
 is rejected. No two of them, nor `metrics-port`, may share a port.
 
+A configuration whose only listeners are TLS ones has nothing to serve until a
+certificate authority has issued, so the charm keeps the broker stopped and the
+unit waiting until it has one. That is deliberate: a Mosquitto with no `listener`
+directive at all does not sit there doing nothing, it opens its own plaintext
+listener on loopback — which is exactly what `port=0` asked it not to do.
+
 | Option | Type | Default | Applying it | Meaning |
 | --- | --- | --- | --- | --- |
 | `port` | int | `1883` | restart | The unencrypted MQTT port. 0 disables it, which is the right thing to do once TLS is in place — but the metrics exporter and the `broker-stats` action both need it. |
@@ -78,14 +84,14 @@ is rejected. No two of them, nor `metrics-port`, may share a port.
 | --- | --- | --- | --- | --- |
 | `log-level` | string | `notice` | reload | One of `error`, `warning`, `notice`, `information`, `debug`. Each level includes the ones above it; the charm expands it into the corresponding `log_type` directives. |
 | `connection-messages` | boolean | `true` | reload | Whether each client connection and disconnection is logged. Useful, but noisy with many short-lived clients. |
-| `sys-interval` | int | `10` | reload | Seconds between updates of the `$SYS` statistics tree. 0 disables `$SYS`, which also stops the metrics exporter. |
-| `metrics-port` | int | `9234` | — | The port the charm's Prometheus exporter listens on. It binds to the unit's private address, and only runs while the `cos-agent` integration exists. Changing it restarts the exporter, not the broker. |
+| `sys-interval` | int | `10` | reload | Seconds between updates of the `$SYS` statistics tree. 0 disables `$SYS`, which also stops the metrics exporter. The exporter's staleness window follows this — it reports the broker down after three intervals, and never sooner than 60 seconds — so raising it does not make `mosquitto_up` flap. |
+| `metrics-port` | int | `9234` | — | The port the charm's Prometheus exporter listens on. It binds to `127.0.0.1`, which is where the co-located COS collector scrapes it and the only place it should be reachable from, and only runs while the `cos-agent` integration exists. Changing it restarts the exporter, not the broker. |
 
 ## Tuning
 
 | Option | Type | Default | Applying it | Meaning |
 | --- | --- | --- | --- | --- |
-| `open-file-limit` | int | `0` | restart | The file descriptor limit for the broker service, as a systemd drop-in. 0 means the charm computes it: `max-connections + 1024`, with a floor of 4096, or 65536 when `max-connections` is -1. The packaged unit sets no limit at all, so an untuned broker refuses connections at around a thousand clients. Has no effect on a snap install, where snapd owns the unit. |
+| `open-file-limit` | int | `0` | restart | The file descriptor limit for the broker service, as a systemd drop-in. 0 means the charm computes it: `max-connections + 1024`, with a floor of 4096, or 65536 when `max-connections` is -1. An explicit value at or below `max-connections` is rejected, because the broker would start refusing connections before it reached the ceiling you asked for. The packaged unit sets no limit at all, so an untuned broker refuses connections at around a thousand clients. Has no effect on a snap install, where snapd owns the unit. |
 | `sysctl-tuning` | boolean | `true` | — | Whether to tune `net.core.somaxconn`, `net.ipv4.tcp_max_syn_backlog` and `net.core.netdev_max_backlog` for many connections. Where the kernel namespace forbids the write, which is common in containers, the charm logs a warning and carries on. Set it false on a host shared with other workloads. |
 
 ## Escape hatches

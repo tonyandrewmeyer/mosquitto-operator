@@ -27,6 +27,14 @@ One kind of request is always refused: a filter under `$SYS`, which would expose
 every client ID and topic count on the broker. The charm grants the rest and the
 requirer sees the narrower `granted-permissions` it actually got.
 
+**Integrating a client is a grant of whatever it asks for.** Beyond the `$SYS`
+refusal there is no operator-side policy: a charm that requests `readwrite #`
+gets read and write access to every topic on the broker. That is the usual
+Juju trust model — you chose to integrate the two applications — but it is worth
+knowing before integrating something you have not read. `juju run mosquitto/0
+list-users` shows what every user has actually been granted, and removing the
+integration removes the user with it.
+
 The full contract, including the databag fields on both sides, is in
 [`docs/interfaces/mqtt/v0/README.md`](../interfaces/mqtt/v0/README.md).
 

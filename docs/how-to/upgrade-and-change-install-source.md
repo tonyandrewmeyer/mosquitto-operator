@@ -21,6 +21,12 @@ Apps stream carries `2.0.18-1ubuntu0.1~esm1`. The charm does not manage Pro
 attachment; do it on the machine, or with the `ubuntu-advantage` subordinate
 charm.
 
+The unit status says so while it applies: a deployment running an archive build
+without the ESM revision reports the package version and what to do about it,
+alongside whatever else it has to say. The two builds carry the same upstream
+version, so this is read from the Debian revision rather than from
+`mosquitto -h`.
+
 ## Change the install source
 
 ```shell
@@ -69,6 +75,11 @@ a file.
 The charm also **holds** the snap, so snapd will not refresh the broker outside a
 maintenance window of your choosing. To take a newer build, change
 `package-channel`, or `juju refresh` the charm.
+
+Changing `package-channel` refreshes the held snap onto the new channel there and
+then, and restarts the broker: every client is disconnected, exactly as for a
+change of `install-source`. Setting it to the channel the snap is already on does
+nothing, so a `juju config` that does not change it costs nothing either.
 
 Two things the charm does not do for a snap install: it writes no systemd
 drop-in, because snapd owns and regenerates those units — so `open-file-limit`
