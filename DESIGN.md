@@ -80,6 +80,11 @@ map 1:1 onto our relation interface. Revisit when 3.0 removes them.
 every unit run would "work" right up until a client reconnects to a different unit and
 finds its session, queued messages and retained messages gone.
 
+The count comes from `app.planned_units()`, not from peer relation membership. Juju
+4.x never removes a departed unit from a *peer* relation and sends no departed hook
+for one, so a charm that counted peers would stay blocked for ever after the operator
+did exactly what the status told them to.
+
 What we offer instead:
 
 - **Bridging as a relation between two Mosquitto applications.** The charm both
@@ -187,7 +192,7 @@ All are leader-only where they mutate shared state; all declare
 | `list-users` | — | Usernames and their ACL rules. Never passwords. |
 | `grant` | `username`, `topic`, `access` (`read`\|`write`\|`readwrite`\|`deny`) | Add an ACL rule. |
 | `revoke` | `username`, `topic` | |
-| `health-check` | `listener` (optional: `plain`\|`tls`\|`all`) | The real MQTT round trip, per listener. Returns per-listener results. |
+| `health-check` | `listener` (optional: `plain`\|`tls`\|`websockets`\|`websockets-tls`\|`all`) | The real MQTT round trip, per listener; the WebSocket listeners go as far as the MQTT upgrade, which is as far as the client tools can. Returns per-listener results. |
 | `broker-stats` | — | A snapshot of the `$SYS` tree. |
 | `create-backup` | `path` (optional) | Persistence db, password file, ACL file, rendered config, as a tarball. |
 | `restore-backup` | `path` | Stops the broker, restores, restarts. |
@@ -285,7 +290,10 @@ It emits **sapcc's metric names** (`broker_clients_connected`,
 our own dashboard JSON as well rather than relying on a fetchable community ID.
 
 It authenticates as a dedicated `_charm_metrics` user whose ACL grants
-`read $SYS/#` and nothing else, and binds to the unit's private address.
+`read $SYS/#` and nothing else, and binds to `127.0.0.1` — which is what
+`COSAgentProvider` builds its scrape target against, the collector being a
+subordinate on the same machine. Binding anywhere else serves the collector
+nothing while exposing the `$SYS` tree to the network.
 
 Alert rules shipped under `src/prometheus_alert_rules/`, led by
 `rate(broker_publish_messages_dropped[5m]) > 0` — the only metric that directly means
@@ -317,7 +325,11 @@ dashes mapped to underscores automatically. We use `errors='raise'` with an expl
 classify each changed directive against the reload-safe and restart-required sets from
 WORKLOAD.md §5 — **defaulting to restart for any directive in neither set**, because
 those lists differ between 2.0 and 2.1 — then reload or restart accordingly, then
-health-check, and roll back if the health check fails.
+health-check, and roll back if the health check fails. The health check is the QoS 1
+round trip, not `systemctl is-active`: a configuration can leave the process up and
+authentication broken, and the archive's 2.0 build has no `--test-config` to have
+caught it first. Only after a change that was actually applied, and only rolled back
+when there is a previous configuration to go back to.
 
 **Status** via `collect_unit_status`, with `add_status()` called as many times as
 apply and ops picking the highest priority.

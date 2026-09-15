@@ -65,9 +65,10 @@ otherwise:
   on loopback.
 
 It authenticates as the charm's own `_charm_metrics` user, whose only permission
-is `read $SYS/#`, and binds to the unit's private address on `metrics-port`
-(9234 by default). The password reaches it as a systemd credential, not as a
-command-line argument.
+is `read $SYS/#`, and binds to `127.0.0.1` on `metrics-port` (9234 by default) —
+which is where the collector scrapes it from, being a subordinate on the same
+machine, and the only place the `$SYS` tree should be readable. The password
+reaches it as a systemd credential, not as a command-line argument.
 
 Check it:
 
