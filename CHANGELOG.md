@@ -32,7 +32,7 @@ description of what the charm does rather than a list of changes to it.
   reload-safe is treated as needing a restart, because the reload-safe set
   differs between Mosquitto 2.0 and 2.1.
 - Manages MQTT users and topic permissions through the `set-password`,
-  `remove-user`, `list-users`, `grant`, `revoke` and `list-users` actions.
+  `remove-user`, `list-users`, `grant` and `revoke` actions.
   Passwords are held in application-owned Juju secrets and never appear in
   action results, relation data, logs or command lines.
 - Offers the `mqtt` integration, so related applications get their own user,
