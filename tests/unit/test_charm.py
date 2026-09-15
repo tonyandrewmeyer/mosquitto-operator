@@ -1631,3 +1631,28 @@ def test_removing_a_user_that_has_no_secret(
     state_out = ctx.run(ctx.on.action('remove-user', params={'username': 'alice'}), state_in)
 
     assert stored_users(state_out) == {}
+
+
+def test_the_cos_agent_databag_carries_jobs_rules_and_dashboards(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """Everything COS needs has to reach the subordinate's databag.
+
+    Alert rules that stay in the charm's source directory alert on nothing, and a
+    dashboard nobody is sent is a file in a tarball. This is cheap to get wrong and
+    invisible until someone goes looking for a graph.
+    """
+    peer = testing.PeerRelation('mosquitto-peers')
+    cos = testing.Relation('cos-agent', remote_app_name='otelcol')
+    state = testing.State(leader=True, relations={peer, cos}, model=testing.Model(type='lxd'))
+
+    out = ctx.run(ctx.on.relation_joined(cos), state)
+
+    published = next(r for r in out.relations if r.endpoint == 'cos-agent')
+    config = json.loads(published.local_unit_data['config'])
+    assert config['metrics_scrape_jobs'], 'the collector was told about no scrape jobs'
+    assert '9234' in json.dumps(config['metrics_scrape_jobs'])
+    assert config['metrics_alert_rules'], 'no alert rules were published'
+    assert config['dashboards'], 'no dashboards were published'
+    # The metric that means data loss is the one rule that has to be there.
+    assert 'broker_publish_messages_dropped' in json.dumps(config['metrics_alert_rules'])

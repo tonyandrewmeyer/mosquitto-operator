@@ -86,7 +86,7 @@ is rejected. No two of them, nor `metrics-port`, may share a port.
 | Option | Type | Default | Applying it | Meaning |
 | --- | --- | --- | --- | --- |
 | `open-file-limit` | int | `0` | restart | The file descriptor limit for the broker service, as a systemd drop-in. 0 means the charm computes it: `max-connections + 1024`, with a floor of 4096, or 65536 when `max-connections` is -1. The packaged unit sets no limit at all, so an untuned broker refuses connections at around a thousand clients. Has no effect on a snap install, where snapd owns the unit. |
-| `sysctl-tuning` | boolean | `true` | — | Whether to tune `net.core.somaxconn`, `net.ipv4.tcp_max_syn_backlog`, `net.core.netdev_max_backlog` and `net.ipv4.ip_local_port_range` for many connections. Where the kernel namespace forbids the write, which is common in containers, the charm logs a warning and carries on. Set it false on a host shared with other workloads. |
+| `sysctl-tuning` | boolean | `true` | — | Whether to tune `net.core.somaxconn`, `net.ipv4.tcp_max_syn_backlog` and `net.core.netdev_max_backlog` for many connections. Where the kernel namespace forbids the write, which is common in containers, the charm logs a warning and carries on. Set it false on a host shared with other workloads. |
 
 ## Escape hatches
 

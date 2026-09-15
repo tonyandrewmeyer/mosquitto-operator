@@ -162,7 +162,7 @@ upgrade never changes behaviour silently.
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `open-file-limit` | int | `0` | 0 means "compute it": `max_connections + 1024`, floor 4096. Written as a systemd drop-in, which is the only thing that works for a service. |
-| `sysctl-tuning` | boolean | `true` | Sets `somaxconn`, `tcp_max_syn_backlog`, `netdev_max_backlog`, `ip_local_port_range`. Degrades with a warning where the kernel namespace forbids it (common in LXD containers), rather than failing the hook. Set `false` on a shared host. |
+| `sysctl-tuning` | boolean | `true` | Sets `somaxconn`, `tcp_max_syn_backlog` and `netdev_max_backlog`. Not `ip_local_port_range`: its value is two whitespace-separated numbers, which charmlibs-sysctl cannot read back, so including it made every hook log an error about tuning it had in fact applied. Degrades with a warning where the kernel namespace forbids the write (common in LXD containers), rather than failing the hook. Set `false` on a shared host. |
 
 **Escape hatch**
 

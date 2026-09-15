@@ -62,11 +62,15 @@ _DIRECTIVE_RE = re.compile(r'^\s*([a-z_0-9]+)\s*(.*?)\s*$')
 
 # Which sysctl values are worth setting for a broker holding many connections. The
 # defaults are sized for a general-purpose host, not for tens of thousands of sockets.
+# `net.ipv4.ip_local_port_range` is deliberately absent. Its value is two numbers
+# separated by whitespace, which charmlibs-sysctl cannot read back, so including it
+# makes every hook log an error about tuning that was in fact applied. It is also the
+# least useful of the four here: it governs outgoing connections, and a broker accepts
+# rather than makes them.
 SYSCTL_TUNING = {
     'net.core.somaxconn': '4096',
     'net.ipv4.tcp_max_syn_backlog': '4096',
     'net.core.netdev_max_backlog': '4096',
-    'net.ipv4.ip_local_port_range': '10240 65535',
 }
 
 # Directives Mosquitto re-reads on SIGHUP, from the "Reloaded on reload signal"

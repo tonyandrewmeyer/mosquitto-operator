@@ -34,9 +34,15 @@ def main_pid(juju: jubilant.Juju, unit: str, service: str = 'mosquitto') -> str:
 
 
 def service_is_running(juju: jubilant.Juju, unit: str, service: str = 'mosquitto') -> bool:
-    """Whether a systemd service is active on a unit."""
-    result = juju.exec(f'/bin/sh -c "systemctl is-active {service}"', unit=unit, wait=60)
-    return result.stdout.strip() == 'active'
+    """Whether a systemd service is active on a unit.
+
+    `systemctl is-active` exits non-zero for a stopped service, and `Juju.exec` raises
+    on a non-zero exit, so this has to tolerate failure rather than treat it as one.
+    """
+    result = exec_allowed_to_fail(
+        juju, unit, f'/bin/sh -c "systemctl is-active {service}"'
+    )
+    return result is not None and result.stdout.strip() == 'active'
 
 
 def round_trip(

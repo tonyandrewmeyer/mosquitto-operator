@@ -81,6 +81,12 @@ class MosquittoCharm(ops.CharmBase):
         framework.observe(self.on[PEER].relation_departed, self._on_reconcile)
         framework.observe(self.on['data'].storage_attached, self._on_reconcile)
         framework.observe(self.certificates.on.certificate_available, self._on_reconcile)
+        # The certificates library only tells us when a certificate arrives. Losing the
+        # integration has to be noticed too, or the TLS listeners stay configured
+        # against material that is no longer being renewed.
+        framework.observe(self.on['certificates'].relation_broken, self._on_reconcile)
+        framework.observe(self.on['cos-agent'].relation_joined, self._on_reconcile)
+        framework.observe(self.on['cos-agent'].relation_broken, self._on_reconcile)
         framework.observe(self.mqtt.on.client_joined, self._on_reconcile)
         framework.observe(self.mqtt.on.client_departed, self._on_client_departed)
         framework.observe(self.upstream.on.broker_available, self._on_reconcile)

@@ -270,8 +270,7 @@ config:
       default: true
       description: |
         Whether to tune kernel networking parameters for a broker with many
-        connections: somaxconn, tcp_max_syn_backlog, netdev_max_backlog and
-        ip_local_port_range.
+        connections: somaxconn, tcp_max_syn_backlog and netdev_max_backlog.
 
         Where the kernel namespace does not permit the write, which is common in
         containers, the charm logs a warning and carries on. Set this to false on a

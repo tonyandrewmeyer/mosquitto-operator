@@ -50,7 +50,6 @@ many sockets:
 | `net.core.somaxconn` | 4096 |
 | `net.ipv4.tcp_max_syn_backlog` | 4096 |
 | `net.core.netdev_max_backlog` | 4096 |
-| `net.ipv4.ip_local_port_range` | 10240 65535 |
 
 These are host-wide, so on a machine shared with other workloads you may not want
 them:
