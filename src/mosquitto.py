@@ -1629,13 +1629,16 @@ def create_backup(file_paths: Paths, destination: pathlib.Path | None = None) ->
     certs = sorted(file_paths.certs_dir.glob('*'))
     sources.extend(certs)
 
+    # The tarball holds password hashes and, on a TLS unit, the private key, so it is
+    # created private rather than created at the umask and chmodded afterwards --
+    # which would leave a window in which anyone could read it.
     try:
-        with tarfile.open(destination, 'w:gz') as archive:
+        handle = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(handle, 'wb') as raw, tarfile.open(fileobj=raw, mode='w:gz') as archive:
             for path in sources:
                 archive.add(path, arcname=str(path).lstrip('/'))
     except (OSError, tarfile.TarError) as e:
         raise Error(f'could not write the backup to {destination}: {e}') from e
-    destination.chmod(0o600)
     logger.info('Wrote a backup of %d files to %s.', len(sources), destination)
     return destination
 
