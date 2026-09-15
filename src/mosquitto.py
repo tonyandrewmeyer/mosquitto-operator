@@ -818,6 +818,53 @@ def ensure_directories(file_paths: Paths) -> None:
     _chown(file_paths.log_file, file_paths.user, file_paths.group, 0o640)
 
 
+def supports_test_config(version: str | None) -> bool:
+    """Whether this version can check a configuration without running it.
+
+    `mosquitto --test-config` arrived in 2.1. On 2.0 there is no dry run at all, so
+    the charm has to fall back on validating its own inputs and on health-checking
+    after the change.
+
+    Args:
+        version: The running Mosquitto version.
+
+    Returns:
+        Whether `--test-config` is available.
+    """
+    return version_tuple(version) >= (2, 1, 0)
+
+
+def check_config(file_paths: Paths, version: str | None) -> str | None:
+    """Ask Mosquitto whether it would accept what is on disk.
+
+    Returns:
+        None if the configuration is acceptable or cannot be checked, otherwise the
+        broker's own complaint about it.
+    """
+    if not supports_test_config(version):
+        return None
+    binary = (
+        pathlib.Path('/snap/bin/mosquitto')
+        if file_paths.service.startswith('snap.')
+        else pathlib.Path('/usr/sbin/mosquitto')
+    )
+    try:
+        result = _run(
+            [binary, '--test-config', '-c', file_paths.config_file], timeout=20, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning('Could not check the configuration: %s', e)
+        return None
+    if not result.returncode:
+        return None
+    errors = [
+        line.split(': ', 1)[-1]
+        for line in (result.stdout + result.stderr).splitlines()
+        if 'Error' in line
+    ]
+    return '; '.join(errors) or 'the broker rejected the configuration'
+
+
 def write_config(
     file_paths: Paths,
     *,

@@ -452,6 +452,16 @@ class MosquittoCharm(ops.CharmBase):
             changes.append(mosquitto.Change.RESTART)
         mosquitto.apply_sysctl(enabled=settings.sysctl_tuning)
 
+        # Where the broker can check a configuration without running it, do that before
+        # asking it to use one: `systemctl reload` is asynchronous and reports success
+        # even for a configuration the broker then rejects, and a restart on a bad
+        # configuration takes the broker down rather than leaving it on the old one.
+        rejection = mosquitto.check_config(paths, version)
+        if rejection is not None:
+            self._service_error = f'the broker rejected the configuration — {rejection}'
+            logger.error('Not applying a configuration Mosquitto rejects: %s', rejection)
+            return
+
         try:
             if not mosquitto.is_running(paths):
                 mosquitto.start(paths)
@@ -592,10 +602,15 @@ class MosquittoCharm(ops.CharmBase):
             if line.strip() and not line.strip().startswith('#')
         )
         if not topics:
+            # Mosquitto rejects a `connection` block with no `topic` lines outright --
+            # `Invalid bridge configuration: no topics defined` -- and refuses to
+            # start. Writing no bridge at all leaves a working broker and a status
+            # that says what is missing.
             logger.warning(
-                'An upstream broker is integrated but bridge-topics is empty, so the '
-                'bridge would carry no traffic. Set bridge-topics to forward something.'
+                'An upstream broker is integrated but bridge-topics is empty, so no '
+                'bridge is configured. Set bridge-topics to forward something.'
             )
+            return None, change
         bridge = mosquitto.Bridge(
             name=f'{self.app.name}-upstream',
             host=endpoint.host,
@@ -837,6 +852,14 @@ class MosquittoCharm(ops.CharmBase):
         if not mosquitto.is_running(paths):
             reason = self._service_error or 'check `juju debug-log` and the unit journal'
             event.add_status(ops.BlockedStatus(f'Mosquitto is not running — {reason}'))
+            return
+        if self._service_error is not None:
+            # The broker is up, but on the previous configuration: the operator asked
+            # for something that could not be applied, and saying "active" here would
+            # leave them believing it had been.
+            event.add_status(
+                ops.BlockedStatus(f'the last change was not applied — {self._service_error}')
+            )
             return
 
         if settings.allow_anonymous:

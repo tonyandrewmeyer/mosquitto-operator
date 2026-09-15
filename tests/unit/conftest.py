@@ -97,6 +97,8 @@ class FakeMosquitto:
         self.root = root
         self.version = version
         self.running = False
+        # What `check_config` reports. None means the broker accepts the configuration.
+        self.rejection: str | None = None
         self.calls: list[str] = []
         self.installs: list[tuple[str, str]] = []
         self.uninstalled: list[str] = []
@@ -159,6 +161,17 @@ class FakeMosquitto:
 
     def get_version(self, install_source: str = 'archive') -> str | None:
         return self.version
+
+    supports_test_config = staticmethod(mosquitto.supports_test_config)
+
+    def check_config(self, file_paths: mosquitto.Paths, version: str | None) -> str | None:
+        """Whatever the test has asked the broker to say about the configuration.
+
+        Defaults to accepting it; set `rejection` to have the broker refuse, which is
+        how a test reaches the "do not apply a configuration Mosquitto rejects" path.
+        """
+        self.calls.append('check_config')
+        return self.rejection
 
     def migrate_state(self, old: mosquitto.Paths, new: mosquitto.Paths) -> None:
         self.calls.append('migrate_state')

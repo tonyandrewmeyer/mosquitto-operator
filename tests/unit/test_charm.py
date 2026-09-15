@@ -489,9 +489,10 @@ def test_a_failed_reload_does_not_error_the_hook(
 ):
     """A reload is asynchronous, so a rejected configuration surfaces here.
 
-    The broker is still up on its old configuration, so the unit stays active; what
-    matters is that the hook does not end in a traceback, and that the failure is in
-    the log with the broker's own words.
+    The hook must not end in a traceback, and the failure must be in the log with the
+    broker's own words. The unit goes to blocked rather than active: the broker is
+    still serving, but on its previous configuration, and saying "ready" would leave
+    the operator believing their change had landed.
     """
     first = ctx.run(ctx.on.start(), make_state())
     fake.apply_error = 'could not reload Mosquitto: exit 1'
@@ -501,8 +502,8 @@ def test_a_failed_reload_does_not_error_the_hook(
         ctx.on.config_changed(), dataclasses.replace(first, config={'sys-interval': 20})
     )
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        'ready — integrate a certificate authority to enable TLS'
+    assert state_out.unit_status == testing.BlockedStatus(
+        'the last change was not applied — could not reload Mosquitto: exit 1'
     )
     assert any('would not come up' in line.message for line in ctx.juju_log)
     assert any('Recent Mosquitto log' in line.message for line in ctx.juju_log)
@@ -1656,3 +1657,55 @@ def test_the_cos_agent_databag_carries_jobs_rules_and_dashboards(
     assert config['dashboards'], 'no dashboards were published'
     # The metric that means data loss is the one rule that has to be there.
     assert 'broker_publish_messages_dropped' in json.dumps(config['metrics_alert_rules'])
+
+
+def test_an_upstream_with_no_topics_writes_no_bridge(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """Mosquitto refuses to start on a `connection` block with no `topic` lines.
+
+    `Invalid bridge configuration: no topics defined` takes the broker down entirely,
+    so an empty `bridge-topics` has to mean no bridge rather than a broken one.
+    """
+    fake.version = '2.1.2'
+    peer = testing.PeerRelation('mosquitto-peers')
+    upstream = testing.Relation(
+        'upstream',
+        remote_app_name='central',
+        remote_app_data={
+            'endpoints': json.dumps([{'host': '10.0.0.9', 'port': 1883, 'tls': False}]),
+        },
+    )
+    state = testing.State(leader=True, relations={peer, upstream}, model=testing.Model(type='lxd'))
+
+    ctx.run(ctx.on.config_changed(), state)
+
+    assert fake.bridge_config is None
+
+
+def test_a_configuration_the_broker_rejects_is_not_applied(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """`systemctl reload` reports success even for a config the broker then rejects.
+
+    So where the broker can check one without running it, the charm has to ask before
+    applying rather than find out afterwards with the service down.
+    """
+    fake.version = '2.1.2'
+    fake.running = True
+    fake.rejection = 'Invalid bridge configuration: no topics defined'
+    state = testing.State(
+        leader=True,
+        relations={testing.PeerRelation('mosquitto-peers')},
+        model=testing.Model(type='lxd'),
+    )
+
+    out = ctx.run(ctx.on.config_changed(), state)
+
+    assert fake.last_change is None, 'the charm applied a configuration the broker rejects'
+    # The broker is still up, on the configuration it had before, so the status has to
+    # say the change did not land rather than simply "active".
+    assert out.unit_status == testing.BlockedStatus(
+        'the last change was not applied — the broker rejected the configuration — '
+        'Invalid bridge configuration: no topics defined'
+    )
