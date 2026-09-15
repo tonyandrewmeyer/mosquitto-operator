@@ -371,10 +371,19 @@ actions:
       publishing a message to a private topic and reading it back. This is a real
       check: a broker can accept TCP connections while being unable to serve any of
       them.
+
+      The WebSocket listeners are checked as far as the MQTT upgrade rather than
+      through a round trip, because the Mosquitto client tools speak MQTT over TCP
+      only. That still catches a build without WebSocket support, a listener that is
+      not up, and TLS material the broker cannot read.
     params:
       listener:
         type: string
-        description: Which listener to check — `plain`, `tls` or `all`.
+        description: |
+          Which listener to check — `plain`, `tls`, `websockets`, `websockets-tls`
+          or `all`. Listeners that are not configured are skipped, so `all` on a
+          plaintext-only deployment checks only the plaintext listener.
+        enum: [plain, tls, websockets, websockets-tls, all]
         default: all
     additionalProperties: false
   broker-stats:

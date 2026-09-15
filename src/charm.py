@@ -37,7 +37,16 @@ PEER = 'mosquitto-peers'
 USERS_KEY = 'users'
 SECRET_LABEL = 'mqtt-user-{username}'  # noqa: S105 — a label template, not a secret.
 SOURCE_KEY = 'install-source'
+CHANNEL_KEY = 'package-channel'
 EXPORTER_SOURCE = pathlib.Path(__file__).parent / 'exporter.py'
+
+# How many `sys_interval` periods the exporter waits for a `$SYS` message before it
+# reports the broker as down, and the floor that applies at the default interval of ten
+# seconds. Without a floor derived from the configured interval, a broker with
+# `sys-interval` above the exporter's fixed staleness window flaps between up and down
+# between publishes, and pages on a broker that is working perfectly well.
+STALE_INTERVALS = 3
+MINIMUM_STALE_AFTER = 60
 
 
 class MosquittoCharm(ops.CharmBase):
@@ -55,6 +64,9 @@ class MosquittoCharm(ops.CharmBase):
         self._exporter_error: str | None = None
         self._bridge_error: str | None = None
         self._install_error: str | None = None
+        # Set when every configured listener is TLS and no certificate has arrived, so
+        # that there is nothing to run the broker for yet.
+        self._listener_error: str | None = None
         # The unit leaving on a peer relation-departed event. It is still listed in
         # `relation.units` while that hook runs, so counting units without excluding it
         # would keep the charm blocked — and nothing else would wake it.
@@ -98,6 +110,7 @@ class MosquittoCharm(ops.CharmBase):
         framework.observe(self.on[PEER].relation_changed, self._on_reconcile)
         framework.observe(self.on[PEER].relation_departed, self._on_peer_departed)
         framework.observe(self.on['data'].storage_attached, self._on_reconcile)
+        framework.observe(self.on['data'].storage_detaching, self._on_storage_detaching)
         framework.observe(self.certificates.on.certificate_available, self._on_reconcile)
         # The certificates library only tells us when a certificate arrives. Losing the
         # integration has to be noticed too, or the TLS listeners stay configured
@@ -338,7 +351,7 @@ class MosquittoCharm(ops.CharmBase):
             return
         paths = mosquitto.paths(settings.install_source)
         mosquitto.ensure_directories(paths)
-        self._remember_install_source(settings.install_source)
+        self._remember_install(settings.install_source, settings.package_channel)
 
     def _on_start(self, event: ops.StartEvent) -> None:
         """Configure and start the broker."""
@@ -390,6 +403,28 @@ class MosquittoCharm(ops.CharmBase):
         self._departing_unit = event.departing_unit
         self._reconcile()
 
+    def _on_storage_detaching(self, event: ops.StorageDetachingEvent) -> None:
+        """Stop writing to the storage before Juju takes it away.
+
+        The persistence database lives on this storage and the broker holds it open for
+        as long as it is running, so detaching underneath a running broker either fails
+        to unmount or leaves the last autosave behind on the mount point rather than on
+        the volume. Juju blocks the detach until this hook returns, so stopping here is
+        the only chance to write the database out where it will be carried.
+        """
+        logger.info('Stopping Mosquitto: its storage is being detached.')
+        mosquitto.remove_exporter()
+        try:
+            mosquitto.stop(self._paths())
+        except mosquitto.ServiceError as e:
+            # Nothing better is available: failing the hook would only have Juju retry
+            # the same detach, and the operator needs to know the database may be stale.
+            logger.error(
+                'Could not stop Mosquitto before its storage was detached (%s). The '
+                'persistence database may be missing everything since the last autosave.',
+                e,
+            )
+
     def _on_client_departed(self, event: mqtt.MQTTClientDepartedEvent) -> None:
         """Remove the user that belonged to a departing client."""
         if not self.unit.is_leader():
@@ -409,11 +444,12 @@ class MosquittoCharm(ops.CharmBase):
 
     # --- Reconciliation ------------------------------------------------------
 
-    def _remember_install_source(self, source: str) -> None:
-        """Record which layout the broker's state is currently in."""
+    def _remember_install(self, source: str, channel: str) -> None:
+        """Record which layout and which snap channel the broker was installed for."""
         relation = self._peers
         if relation is not None and self.unit.is_leader():
             relation.data[self.app][SOURCE_KEY] = source
+            relation.data[self.app][CHANNEL_KEY] = channel
 
     def _previous_install_source(self) -> str | None:
         """The install source the broker's state was last written for."""
@@ -422,15 +458,33 @@ class MosquittoCharm(ops.CharmBase):
             return None
         return relation.data[self.app].get(SOURCE_KEY) or None
 
-    def _reconcile(self) -> None:
+    def _previous_package_channel(self) -> str | None:
+        """The snap channel the broker was last installed from."""
+        relation = self._peers
+        if relation is None:
+            return None
+        return relation.data[self.app].get(CHANNEL_KEY) or None
+
+    def _reconcile(self) -> str | None:
         """Render the configuration and apply whatever it needs.
 
         Everything funnels through here, so that the broker's state is a function of
         the charm's inputs rather than of the order events happened to arrive in.
+
+        Returns:
+            Why the broker is not in the state the charm's inputs describe, or None if
+            it is. Event handlers ignore this and let `collect_unit_status` report it;
+            action handlers use it so that an action cannot report that it did
+            something the broker never accepted.
         """
         settings = self._config
-        if settings is None or self._scale_problem() or self._is_paused():
-            return
+        if settings is None:
+            return self._config_error or 'the charm configuration is invalid'
+        scale = self._scale_problem()
+        if scale is not None:
+            return scale
+        if self._is_paused():
+            return 'the broker is paused; run the resume action to start it again'
 
         # Both of these publish a request built from the charm's configuration, and both
         # libraries only republish on their own relation events. Without these calls a
@@ -450,7 +504,7 @@ class MosquittoCharm(ops.CharmBase):
             # the next event, rather than ending the hook in a traceback.
             self._install_error = str(e)
             logger.error('Could not install Mosquitto: %s', e)
-            return
+            return self._install_error
 
         mosquitto.ensure_directories(paths)
 
@@ -460,7 +514,7 @@ class MosquittoCharm(ops.CharmBase):
             # Leadership is not settled yet. The leader-elected that follows brings us
             # straight back here, so there is nothing to do but wait for it.
             logger.info('Not configuring the broker yet: %s.', e)
-            return
+            return f'waiting for leadership: {e}'
         changes = [
             mosquitto.write_password_file(paths, users),
             mosquitto.write_acl_file(paths, rules),
@@ -469,6 +523,13 @@ class MosquittoCharm(ops.CharmBase):
         material = self._tls_material()
         if material is not None:
             changes.append(mosquitto.write_tls_material(paths, material))
+        elif not self.model.get_relation('certificates'):
+            # Only once the integration itself is gone, never merely because no
+            # certificate has been assigned yet: `get_assigned_certificate` returns
+            # nothing for the several hooks between a renewal being requested and the
+            # new certificate arriving, and deleting a key the broker is still serving
+            # with would take the TLS listeners down to tidy up.
+            changes.append(mosquitto.remove_tls_material(paths))
 
         listeners = mosquitto.listeners_for(
             port=settings.port,
@@ -477,6 +538,22 @@ class MosquittoCharm(ops.CharmBase):
             tls_websockets_port=settings.tls_websockets_port,
             have_certificates=material is not None,
         )
+        if not listeners:
+            # Every configured listener is TLS and no certificate has arrived. Carrying
+            # on would write a configuration with no `listener` directive in it at all,
+            # and Mosquitto 2.x answers that by opening its own implicit plaintext
+            # listener on loopback -- which is precisely what `port=0` asked it not to
+            # do. Keep the broker down until there is something to serve.
+            self._listener_error = (
+                'every listener is TLS, and there is no certificate to serve them with yet'
+            )
+            logger.info('Not starting Mosquitto: %s.', self._listener_error)
+            try:
+                if mosquitto.is_running(paths):
+                    mosquitto.stop(paths)
+            except mosquitto.ServiceError as e:
+                logger.warning('Could not stop Mosquitto while it has no listener: %s', e)
+            return self._listener_error
         broker = mosquitto.BrokerSettings(
             listeners=listeners,
             allow_anonymous=settings.allow_anonymous,
@@ -528,13 +605,19 @@ class MosquittoCharm(ops.CharmBase):
             # And take it back off disk, so that the nightly logrotate SIGHUP does not
             # restart the broker into it at 03:00.
             mosquitto.restore_fragments(paths, previous_fragments)
-            return
+            return self._service_error
 
+        change = mosquitto.merge_changes(changes)
+        # Whether there is a known-good configuration to go back to. On a broker that
+        # has never run there is not: taking the charm's fragments back off disk would
+        # leave Mosquitto with no configuration at all, which is worse than leaving the
+        # rejected one there for the operator to look at.
+        was_running = mosquitto.is_running(paths)
         try:
-            if not mosquitto.is_running(paths):
+            if not was_running:
                 mosquitto.start(paths)
             else:
-                mosquitto.apply(paths, mosquitto.merge_changes(changes))
+                mosquitto.apply(paths, change)
                 # `systemctl reload` is asynchronous and succeeds even for a
                 # configuration the broker then rejects, on which it exits -- and on
                 # 2.0 there is no `--test-config` to have caught that beforehand. One
@@ -551,7 +634,23 @@ class MosquittoCharm(ops.CharmBase):
             logger.error('Mosquitto would not come up: %s', e)
             for line in mosquitto.last_log(paths).splitlines():
                 logger.warning('mosquitto: %s', line)
-            return
+            if was_running:
+                self._roll_back(paths, previous_fragments)
+            return self._service_error
+
+        if not mosquitto.is_running(paths):
+            # `collect_unit_status` says so for itself, and more usefully than anything
+            # available here; this is only so that an action does not report that its
+            # change landed on a broker that is not there to have taken it.
+            return 'Mosquitto is not running'
+
+        failure = self._verify(settings, paths, users, change)
+        if failure is not None:
+            self._service_error = failure
+            logger.error('Mosquitto did not serve MQTT after the change: %s', failure)
+            if was_running:
+                self._roll_back(paths, previous_fragments)
+            return failure
 
         self._open_ports(settings, have_tls=material is not None)
         try:
@@ -563,6 +662,77 @@ class MosquittoCharm(ops.CharmBase):
             self._exporter_error = str(e)
             logger.error('The metrics exporter would not start: %s', e)
         self._publish_mqtt(settings, material is not None)
+        return None
+
+    def _verify(
+        self,
+        settings: config.MosquittoConfig,
+        paths: mosquitto.Paths,
+        users: Mapping[str, str],
+        change: mosquitto.Change,
+    ) -> str | None:
+        """Check that the broker is really serving MQTT on the new configuration.
+
+        `systemctl is-active` says the process is up, which is not the same thing: a
+        configuration can leave the broker running while breaking authentication, the
+        ACL file or the listener itself, and on the archive's 2.0 build there is no
+        `--test-config` to have caught any of it beforehand. This does the same QoS 1
+        round trip the health-check action does.
+
+        Only after a change that was actually applied: an `update-status` on an
+        untouched broker has nothing to prove, and a round trip on every hook would be
+        several seconds of every hook.
+
+        Args:
+            settings: The charm's configuration.
+            paths: Where Mosquitto's files live.
+            users: The MQTT users, and their passwords.
+            change: What applying the configuration required.
+
+        Returns:
+            What went wrong, or None if the broker answered (or there was nothing to
+            check).
+        """
+        if change is mosquitto.Change.NONE:
+            return None
+        if not settings.port:
+            # The round trip needs a plaintext listener on loopback. A TLS-only broker
+            # is checked by the health-check action, which can be given the authority
+            # certificate; there is nothing useful to do automatically here.
+            logger.debug('No plaintext listener, so not verifying the change with a round trip.')
+            return None
+        passed, message = mosquitto.health_check(
+            paths,
+            host='127.0.0.1',
+            port=settings.port,
+            username=mosquitto.HEALTH_USER,
+            password=users[mosquitto.HEALTH_USER],
+        )
+        return None if passed else message
+
+    def _roll_back(self, paths: mosquitto.Paths, snapshot: Mapping[str, str | None]) -> None:
+        """Put the previous configuration back and get the broker onto it.
+
+        Leaving a configuration the broker will not serve on disk is not neutral: the
+        packaged logrotate fragment SIGHUPs the broker every night, and a reboot does
+        the same, so a unit that was merely blocked at teatime is down by morning. The
+        operator's change is refused, loudly, rather than half-applied.
+
+        Args:
+            paths: Where Mosquitto's files live.
+            snapshot: The fragments as `snapshot_fragments` recorded them.
+        """
+        logger.warning('Restoring the previous configuration.')
+        mosquitto.restore_fragments(paths, snapshot)
+        try:
+            if mosquitto.is_running(paths):
+                mosquitto.apply(paths, mosquitto.Change.RESTART)
+            else:
+                mosquitto.start(paths)
+        except mosquitto.ServiceError as e:
+            # Both the rejected change and this are reported: the status keeps the
+            # first, which is the one that says what the operator did wrong.
+            logger.error('Could not put Mosquitto back on its previous configuration: %s', e)
 
     def _install(self, settings: config.MosquittoConfig, paths: mosquitto.Paths) -> str | None:
         """Make sure the right Mosquitto is installed, migrating if the source changed.
@@ -591,7 +761,23 @@ class MosquittoCharm(ops.CharmBase):
             # between the archive and the PPA upgrades the same package in place.
             if mosquitto.different_packaging(previous, settings.install_source):
                 mosquitto.uninstall(previous)
-        self._remember_install_source(settings.install_source)
+        elif (
+            settings.install_source is config.InstallSource.SNAP
+            and self._previous_package_channel() not in (None, settings.package_channel)
+        ):
+            # The snap is held, so nothing else ever moves it: without this,
+            # `juju config mosquitto package-channel=...` rewrites the charm's record
+            # of the channel and leaves the broker on the revision it was installed
+            # with, while the documented way to take a security update quietly does
+            # nothing at all.
+            logger.info(
+                'Snap channel changed from %s to %s; refreshing.',
+                self._previous_package_channel(),
+                settings.package_channel,
+            )
+            self.unit.status = ops.MaintenanceStatus('changing snap channel')
+            mosquitto.install(settings.install_source, settings.package_channel)
+        self._remember_install(settings.install_source, settings.package_channel)
 
         version = mosquitto.get_version(settings.install_source)
         if version is None:
@@ -610,17 +796,29 @@ class MosquittoCharm(ops.CharmBase):
         find its session, queued messages and retained messages simply gone. That
         failure only shows up under load, long after deployment, so the charm refuses
         up front instead.
+
+        The count comes from Juju's own goal state rather than from peer relation
+        membership. Juju 4.x does not remove a departed unit from a *peer* relation --
+        `relation-list` still returns it long afterwards, and no departed hook fires --
+        so a charm that counted peers would stay blocked for ever after the operator
+        removed the extra unit it was complaining about. Peer membership is still the
+        fallback for the case where goal state cannot be read.
         """
         relation = self._peers
-        others = (
+        peers = (
             {unit for unit in relation.units if unit != self._departing_unit}
             if relation is not None
             else set()
         )
-        if others:
+        try:
+            count = self.app.planned_units()
+        except ops.ModelError as e:
+            logger.warning('Could not read the planned unit count (%s); counting peers.', e)
+            count = len(peers) + 1
+        if count > 1:
             return (
                 f'Mosquitto does not cluster, so this charm runs one unit; '
-                f'{len(others) + 1} are deployed. Remove the extra units with '
+                f'{count} are deployed. Remove the extra units with '
                 f'`juju remove-unit --destroy-storage`, and integrate separate Mosquitto '
                 f'applications on '
                 f'`upstream` if you need more than one broker.'
@@ -702,7 +900,10 @@ class MosquittoCharm(ops.CharmBase):
         """Render the bridge to the upstream broker, if there is one."""
         connection = self.upstream.get_connection()
         if connection is None or not connection.endpoints:
-            return None, mosquitto.Change.NONE
+            # The upstream integration has gone, so the authority the charm wrote for
+            # it is no longer anything but a file left behind on the unit -- and one
+            # that every later backup would carry.
+            return None, mosquitto.remove_bridge_ca(paths)
         if not mosquitto.supports_bridging(version):
             self._bridge_error = (
                 f'Mosquitto {version} is vulnerable to CVE-2024-3935 through bridge '
@@ -723,9 +924,11 @@ class MosquittoCharm(ops.CharmBase):
             # of BrokerConnection says so.
             logger.warning('The upstream broker published no usable endpoint.')
             return None, mosquitto.Change.NONE
-        change = mosquitto.Change.NONE
-        if connection.tls_ca:
-            change = mosquitto.write_bridge_ca(paths, connection.tls_ca)
+        change = (
+            mosquitto.write_bridge_ca(paths, connection.tls_ca)
+            if connection.tls_ca
+            else mosquitto.remove_bridge_ca(paths)
+        )
         topics = tuple(
             line.strip()
             for line in settings.bridge_topics.splitlines()
@@ -794,7 +997,6 @@ class MosquittoCharm(ops.CharmBase):
             )
             mosquitto.remove_exporter()
             return
-        address = self._bind_address() or '127.0.0.1'
         changed = mosquitto.install_exporter(
             EXPORTER_SOURCE,
             paths,
@@ -802,8 +1004,15 @@ class MosquittoCharm(ops.CharmBase):
             broker_port=settings.port,
             username=mosquitto.METRICS_USER,
             password=users[mosquitto.METRICS_USER],
-            listen_address=address,
+            # Loopback, because the only thing that scrapes this is the COS machine
+            # collector, which is a subordinate on this very machine and is told to
+            # scrape `localhost:<metrics-port>`. Binding to the unit's own address
+            # instead would serve nothing to the collector and expose the broker's
+            # internals to the rest of the network.
+            listen_address='127.0.0.1',
             listen_port=settings.metrics_port,
+            stale_after=max(MINIMUM_STALE_AFTER, settings.sys_interval * STALE_INTERVALS),
+            max_connections=settings.max_connections,
         )
         # `is_running(paths)` would be the *broker*, which is running by the time we get
         # here, so a stopped or failed exporter would never be started again. Restarting
@@ -989,6 +1198,12 @@ class MosquittoCharm(ops.CharmBase):
             else:
                 event.add_status(ops.MaintenanceStatus('installing Mosquitto'))
             return
+        if self._listener_error is not None:
+            # Deliberately ahead of the "not running" check below: the broker is down
+            # because the charm stopped it, and saying so is more use than saying that
+            # it is not running.
+            event.add_status(ops.WaitingStatus(self._listener_error))
+            return
         if not mosquitto.is_running(paths):
             reason = self._service_error or 'check `juju debug-log` and the unit journal'
             event.add_status(ops.BlockedStatus(f'Mosquitto is not running — {reason}'))
@@ -1009,6 +1224,17 @@ class MosquittoCharm(ops.CharmBase):
         notes: list[str] = []
         if settings.allow_anonymous:
             notes.append('anonymous clients may connect, and are granted no topics')
+        unpatched = mosquitto.unpatched_archive_build(settings.install_source)
+        if unpatched is not None:
+            # Ubuntu 24.04 has Mosquitto in `universe`, so the default install source
+            # is a build with no standard security support. That is documented, but an
+            # operator who deployed the charm without reading the packaging analysis
+            # should not have to go looking for it.
+            notes.append(
+                f'Mosquitto {unpatched} comes from universe and has no standard '
+                f'security support; set install-source=ppa, or attach Ubuntu Pro for '
+                f'the ESM build'
+            )
         if self._bridge_error is not None:
             notes.append(f'the bridge is disabled: {self._bridge_error}')
         if self._exporter_error is not None:
@@ -1042,6 +1268,25 @@ class MosquittoCharm(ops.CharmBase):
             return False
         return True
 
+    @staticmethod
+    def _fail_if_not_reconciled(event: ops.ActionEvent, failure: str | None) -> None:
+        """Fail an action whose change the broker did not actually take.
+
+        Every mutating action records what it wants and then reconciles. Reporting
+        success on the strength of the record alone tells the operator the broker is
+        doing something it is not: the desired state is stored, the unit is blocked,
+        and the action said it worked.
+
+        Args:
+            event: The action being run.
+            failure: What `_reconcile` said went wrong, or None.
+        """
+        if failure is not None:
+            event.fail(
+                f'The change was recorded, but the broker is not running it: {failure}. '
+                f'Fix the problem and run the force-reconfigure action.'
+            )
+
     def _on_set_password(self, event: ops.ActionEvent) -> None:
         """Create an MQTT user, or change an existing user's password."""
         if not self._require_leader(event):
@@ -1053,7 +1298,7 @@ class MosquittoCharm(ops.CharmBase):
             users[params.username] = {'owner': 'action', 'acl': []}
             self._save_users(users)
         self._set_password(params.username, password)
-        self._reconcile()
+        failure = self._reconcile()
         event.set_results(
             {
                 'username': params.username,
@@ -1065,6 +1310,10 @@ class MosquittoCharm(ops.CharmBase):
             'The password is in the Juju secret above; read it with '
             '`juju show-secret --reveal <id>`.'
         )
+        # The results are set either way: the secret holds the new password whether or
+        # not the broker took it, and an operator sorting out a blocked unit needs to
+        # know which password they are sorting out.
+        self._fail_if_not_reconciled(event, failure)
 
     def _on_remove_user(self, event: ops.ActionEvent) -> None:
         """Remove an MQTT user."""
@@ -1090,8 +1339,9 @@ class MosquittoCharm(ops.CharmBase):
         del users[params.username]
         self._save_users(users)
         self._forget_password(params.username)
-        self._reconcile()
+        failure = self._reconcile()
         event.set_results({'removed': params.username})
+        self._fail_if_not_reconciled(event, failure)
 
     def _on_list_users(self, event: ops.ActionEvent) -> None:
         """List the managed users and their permissions."""
@@ -1130,8 +1380,9 @@ class MosquittoCharm(ops.CharmBase):
         acl.append([params.topic, str(params.access)])
         record['acl'] = sorted(acl)
         self._save_users(users)
-        self._reconcile()
+        failure = self._reconcile()
         event.set_results({'username': params.username, 'acl': json.dumps(record['acl'])})
+        self._fail_if_not_reconciled(event, failure)
 
     def _on_revoke(self, event: ops.ActionEvent) -> None:
         """Remove a topic permission from a user."""
@@ -1150,8 +1401,9 @@ class MosquittoCharm(ops.CharmBase):
             return
         record['acl'] = acl
         self._save_users(users)
-        self._reconcile()
+        failure = self._reconcile()
         event.set_results({'username': params.username, 'acl': json.dumps(acl)})
+        self._fail_if_not_reconciled(event, failure)
 
     def _on_health_check(self, event: ops.ActionEvent) -> None:
         """Check that the broker is really serving MQTT."""
@@ -1172,20 +1424,31 @@ class MosquittoCharm(ops.CharmBase):
         have_tls = self._tls_material() is not None
 
         results: dict[str, str] = {}
-        checks: list[tuple[str, int, pathlib.Path | None]] = []
-        if params.listener in (config.Listener.PLAIN, config.Listener.ALL) and settings.port:
-            checks.append(('plain', settings.port, None))
-        if (
-            params.listener in (config.Listener.TLS, config.Listener.ALL)
-            and settings.tls_port
-            and have_tls
-        ):
+        # Each entry is the name to report it under, the port, whether it is a
+        # WebSocket listener, and the authority certificate when it is a TLS one.
+        checks: list[tuple[str, int, bool, pathlib.Path | None]] = []
+        ca = paths.certs_dir / 'ca.crt'
+        wanted = params.listener
+        if wanted in (config.Listener.PLAIN, config.Listener.ALL) and settings.port:
+            checks.append(('plain', settings.port, False, None))
+        if wanted in (config.Listener.TLS, config.Listener.ALL) and settings.tls_port and have_tls:
             # The TLS listener is checked separately on purpose: a certificate renewal
             # that leaves the key unreadable breaks only this one, and a plaintext
             # check would happily report everything as fine.
-            checks.append(('tls', settings.tls_port, paths.certs_dir / 'ca.crt'))
+            checks.append(('tls', settings.tls_port, False, ca))
+        if (
+            wanted in (config.Listener.WEBSOCKETS, config.Listener.ALL)
+            and settings.websockets_port
+        ):
+            checks.append(('websockets', settings.websockets_port, True, None))
+        if (
+            wanted in (config.Listener.TLS_WEBSOCKETS, config.Listener.ALL)
+            and settings.tls_websockets_port
+            and have_tls
+        ):
+            checks.append(('websockets-tls', settings.tls_websockets_port, True, ca))
         if not checks:
-            if params.listener is config.Listener.TLS and not have_tls:
+            if wanted in (config.Listener.TLS, config.Listener.TLS_WEBSOCKETS) and not have_tls:
                 event.fail(
                     'There is no TLS listener: integrate a certificate authority on '
                     '`certificates` first.'
@@ -1195,16 +1458,26 @@ class MosquittoCharm(ops.CharmBase):
             return
 
         failures = []
-        for name, port, cafile in checks:
+        for name, port, websockets, cafile in checks:
+            # TLS listeners are checked over the address the certificate names; the
+            # plaintext ones over loopback, which needs no certificate to match.
             host = '127.0.0.1' if cafile is None else (self._bind_address() or '127.0.0.1')
-            passed, message = mosquitto.health_check(
-                paths,
-                host=host,
-                port=port,
-                username=mosquitto.HEALTH_USER,
-                password=password,
-                cafile=cafile,
-            )
+            if websockets:
+                # Not the same check: the Mosquitto client tools speak MQTT over TCP
+                # only, so a WebSocket listener is taken as far as the MQTT upgrade
+                # rather than through a round trip. See `mosquitto.websocket_check`.
+                passed, message = mosquitto.websocket_check(
+                    host=host, port=port, tls=cafile is not None, cafile=cafile
+                )
+            else:
+                passed, message = mosquitto.health_check(
+                    paths,
+                    host=host,
+                    port=port,
+                    username=mosquitto.HEALTH_USER,
+                    password=password,
+                    cafile=cafile,
+                )
             results[name] = ('ok: ' if passed else 'failed: ') + message
             if not passed:
                 failures.append(name)
@@ -1276,21 +1549,35 @@ class MosquittoCharm(ops.CharmBase):
         except mosquitto.ServiceError as e:
             event.fail(f'Could not stop Mosquitto to restore: {e}')
             return
+        restore_error: str | None = None
         try:
             mosquitto.restore_backup(paths, pathlib.Path(params.path))
         except mosquitto.Error as e:
             # A typo in the path, or a tarball that is not one of ours, is an operator
             # mistake: fail the action rather than putting the unit into error, which
             # would need `juju resolve` to get out of.
-            event.fail(f'Could not restore {params.path}: {e}')
+            restore_error = f'Could not restore {params.path}: {e}'
+        # Whatever happened, try to get the broker back: a failed restore must not also
+        # leave the service down.
+        start_error: str | None = None
+        try:
+            mosquitto.start(paths)
+        except mosquitto.ServiceError as e:
+            start_error = str(e)
+            logger.error('Mosquitto did not come back after a restore: %s', e)
+        if restore_error is not None:
+            event.fail(restore_error)
             return
-        finally:
-            # Whatever happened, try to get the broker back: a failed restore must not
-            # also leave the service down.
-            try:
-                mosquitto.start(paths)
-            except mosquitto.ServiceError as start_error:
-                logger.error('Mosquitto did not come back after a restore: %s', start_error)
+        if start_error is not None:
+            # The files on disk are the ones from the backup, so the restore itself did
+            # happen; what did not happen is the broker serving them. Reporting
+            # `restored` and nothing else here is how an operator ends up believing
+            # they have recovered while every client is still disconnected.
+            event.fail(
+                f'{params.path} was restored, but Mosquitto would not start on it: '
+                f'{start_error}. Check `juju debug-log` and the unit journal.'
+            )
+            return
         event.set_results({'restored': params.path})
 
     def _on_force_reconfigure(self, event: ops.ActionEvent) -> None:
@@ -1302,12 +1589,12 @@ class MosquittoCharm(ops.CharmBase):
             mosquitto.EXTRA_CONFIG_FILENAME,
         ):
             (paths.conf_dir / name).unlink(missing_ok=True)
-        self._reconcile()
+        failure = self._reconcile()
         event.set_results({'result': 'reconfigured'})
+        self._fail_if_not_reconciled(event, failure)
 
     def _on_pause(self, event: ops.ActionEvent) -> None:
         """Stop the broker for host maintenance."""
-        self._set_paused(paused=True)
         mosquitto.remove_exporter()
         try:
             # Disabled as well as stopped: a stopped-but-enabled service comes back at
@@ -1317,13 +1604,19 @@ class MosquittoCharm(ops.CharmBase):
         except mosquitto.ServiceError as e:
             event.fail(f'Could not stop Mosquitto: {e}')
             return
+        # Only once the broker really is down. Recording it first and then failing to
+        # stop leaves the charm reporting a paused broker that is still serving every
+        # client on it -- and reporting it through a flag that stops every later
+        # reconcile from noticing.
+        self._set_paused(paused=True)
         event.set_results({'result': 'paused'})
 
     def _on_resume(self, event: ops.ActionEvent) -> None:
         """Start the broker again after a pause."""
         self._set_paused(paused=False)
-        self._reconcile()
+        failure = self._reconcile()
         event.set_results({'result': 'resumed'})
+        self._fail_if_not_reconciled(event, failure)
 
 
 if __name__ == '__main__':  # pragma: nocover

@@ -264,7 +264,7 @@ def test_grant_rejects_an_invented_access_level():
         config.GrantParams.model_validate({'username': 'alice', 'topic': 't', 'access': 'admin'})
 
 
-@pytest.mark.parametrize('listener', ['plain', 'tls', 'all'])
+@pytest.mark.parametrize('listener', ['plain', 'tls', 'websockets', 'websockets-tls', 'all'])
 def test_health_check_listeners(listener: str):
     assert (
         str(config.HealthCheckParams.model_validate({'listener': listener}).listener) == listener
@@ -282,3 +282,32 @@ def test_restore_backup_requires_a_path():
 
 def test_create_backup_path_is_optional():
     assert config.CreateBackupParams().path is None
+
+
+def test_an_explicit_file_limit_below_the_connection_limit_is_rejected():
+    """The broker refuses connections before it reaches the ceiling asked for.
+
+    The only symptom is `accept: Too many open files` in a log nobody is reading, so
+    the charm refuses the combination rather than deploying into it.
+    """
+    with pytest.raises(pydantic.ValidationError, match='must be greater than'):
+        make(max_connections=5000, open_file_limit=4096)
+
+
+def test_an_explicit_file_limit_above_the_connection_limit_is_accepted():
+    assert make(max_connections=1000, open_file_limit=2000).file_limit() == 2000
+
+
+def test_an_explicit_file_limit_with_unlimited_connections_is_accepted():
+    """There is no number to check it against, and a finite ceiling is still useful."""
+    assert make(max_connections=-1, open_file_limit=999).file_limit() == 999
+
+
+def test_an_empty_password_is_rejected():
+    """Distinguished from omission: an empty password used to become a generated one.
+
+    The action then reported `generated=false`, so an operator was told their own
+    password had been set when it had not.
+    """
+    with pytest.raises(pydantic.ValidationError, match='must not be empty'):
+        config.SetPasswordParams(username='alice', password='')

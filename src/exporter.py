@@ -312,6 +312,10 @@ UP_HELP = (
     'Whether the exporter is currently receiving $SYS messages from the broker (1) or not (0).'
 )
 BUILD_INFO_HELP = 'The version of the Mosquitto Prometheus exporter.'
+MAX_CONNECTIONS_HELP = (
+    'The connection ceiling the broker is configured with, so that alerts can be '
+    'written against the configured limit rather than against a fixed number.'
+)
 
 
 def parse_line(line: str) -> tuple[str, str]:
@@ -469,14 +473,20 @@ class Registry:
     worker threads, so every access is guarded by a lock.
     """
 
-    def __init__(self, *, stale_after: float = STALE_AFTER) -> None:
+    def __init__(
+        self, *, stale_after: float = STALE_AFTER, max_connections: int | None = None
+    ) -> None:
         """Initialise an empty registry.
 
         Args:
             stale_after: How many seconds may pass without a ``$SYS`` message before the
                 broker is reported as down.
+            max_connections: The broker's connection ceiling, exported as its own
+                gauge. None when the broker accepts an unlimited number, in which case
+                no gauge is exported and a ratio alert against it never fires.
         """
         self._stale_after = stale_after
+        self._max_connections = max_connections
         self._lock = threading.Lock()
         self._samples: dict[tuple[str, tuple[tuple[str, str], ...]], Sample] = {}
         self._last_update: float | None = None
@@ -589,6 +599,16 @@ class Registry:
                 BUILD_INFO_HELP,
             )
         )
+        if self._max_connections is not None:
+            samples.append(
+                Sample(
+                    'mosquitto_max_connections',
+                    (),
+                    float(self._max_connections),
+                    GAUGE,
+                    MAX_CONNECTIONS_HELP,
+                )
+            )
         return samples
 
     def render(self, *, now: float | None = None) -> str:
@@ -917,6 +937,21 @@ def build_parser() -> argparse.ArgumentParser:
         '--listen-address', default='127.0.0.1', help='address to serve /metrics on'
     )
     parser.add_argument('--listen-port', type=int, default=9234, help='port to serve /metrics on')
+    parser.add_argument(
+        '--stale-after',
+        type=float,
+        default=STALE_AFTER,
+        help='seconds without a $SYS message after which the broker is reported as '
+        "down. This has to clear the broker's sys_interval several times over, or a "
+        'healthy broker flaps between up and down between publishes',
+    )
+    parser.add_argument(
+        '--max-connections',
+        type=int,
+        default=-1,
+        help="the broker's connection ceiling, exported as mosquitto_max_connections. "
+        'Negative for no limit, which exports nothing',
+    )
     parser.add_argument('--cafile', default=None, help='CA bundle for the broker TLS listener')
     parser.add_argument('--insecure', action='store_true', help='skip TLS hostname verification')
     parser.add_argument(
@@ -957,7 +992,10 @@ def main(argv: typing.Sequence[str] | None = None) -> int:
             logger.error('Could not read the password file: %s', exc)
             return 1
 
-    registry = Registry()
+    registry = Registry(
+        stale_after=args.stale_after,
+        max_connections=args.max_connections if args.max_connections >= 0 else None,
+    )
     try:
         server = build_server(args.listen_address, args.listen_port, registry)
     except OSError as exc:

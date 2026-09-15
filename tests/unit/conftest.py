@@ -51,6 +51,8 @@ class ExporterState:
     listen_port: int | None = None
     username: str | None = None
     password: str | None = None
+    stale_after: int | None = None
+    max_connections: int | None = None
 
 
 class FakeMosquitto:
@@ -126,8 +128,13 @@ class FakeMosquitto:
         self.install_error: str | None = None
         self.start_works = True
         self.health: tuple[bool, str] = (True, 'ok')
+        self.websockets: tuple[bool, str] = (True, 'upgraded')
         self.sys_tree: dict[str, str] = {'$SYS/broker/version': 'mosquitto 2.0.18'}
         self.last_health_check: dict[str, Any] = {}
+        self.last_websocket_check: dict[str, Any] = {}
+        # The Debian version the archive build reports, when the test wants the charm
+        # to notice an unsupported one. None means "patched, or not from the archive".
+        self.unpatched: str | None = None
         self.start_error: str | None = None
         self.exporter_start_error: str | None = None
         self.stop_error: str | None = None
@@ -176,6 +183,9 @@ class FakeMosquitto:
 
     def get_version(self, install_source: str = 'archive') -> str | None:
         return self.version
+
+    def unpatched_archive_build(self, install_source: str) -> str | None:
+        return self.unpatched if install_source == 'archive' else None
 
     supports_test_config = staticmethod(mosquitto.supports_test_config)
 
@@ -253,11 +263,23 @@ class FakeMosquitto:
         self.tls = material
         return mosquitto.Change.RELOAD if changed else mosquitto.Change.NONE
 
+    def remove_tls_material(self, file_paths: mosquitto.Paths) -> mosquitto.Change:
+        self.calls.append('remove_tls_material')
+        removed = self.tls is not None
+        self.tls = None
+        return mosquitto.Change.RESTART if removed else mosquitto.Change.NONE
+
     def write_bridge_ca(self, file_paths: mosquitto.Paths, ca: str) -> mosquitto.Change:
         self.calls.append('write_bridge_ca')
         changed = ca != self.bridge_ca
         self.bridge_ca = ca
         return mosquitto.Change.RELOAD if changed else mosquitto.Change.NONE
+
+    def remove_bridge_ca(self, file_paths: mosquitto.Paths) -> mosquitto.Change:
+        self.calls.append('remove_bridge_ca')
+        removed = self.bridge_ca is not None
+        self.bridge_ca = None
+        return mosquitto.Change.RESTART if removed else mosquitto.Change.NONE
 
     def write_config(
         self,
@@ -341,6 +363,8 @@ class FakeMosquitto:
         password: str,
         listen_address: str,
         listen_port: int,
+        stale_after: int,
+        max_connections: int,
     ) -> bool:
         self.calls.append('install_exporter')
         previous = dataclasses.replace(self.exporter)
@@ -350,6 +374,8 @@ class FakeMosquitto:
         self.exporter.listen_port = listen_port
         self.exporter.username = username
         self.exporter.password = password
+        self.exporter.stale_after = stale_after
+        self.exporter.max_connections = max_connections
         return dataclasses.replace(self.exporter, running=previous.running) != previous
 
     def exporter_running(self) -> bool:
@@ -386,6 +412,24 @@ class FakeMosquitto:
             'cafile': cafile,
         }
         return self.health
+
+    def websocket_check(
+        self,
+        *,
+        host: str,
+        port: int,
+        tls: bool = False,
+        cafile: pathlib.Path | None = None,
+        timeout: int = 10,
+    ) -> tuple[bool, str]:
+        self.calls.append('websocket_check')
+        self.last_websocket_check = {
+            'host': host,
+            'port': port,
+            'tls': tls,
+            'cafile': cafile,
+        }
+        return self.websockets
 
     def sys_snapshot(
         self,

@@ -1214,3 +1214,50 @@ def test_run_subscriber_resets_the_backoff_after_a_long_run(monkeypatch: pytest.
     )
 
     assert waits == [1.0, 1.0]
+
+
+def test_the_staleness_window_is_configurable():
+    """A fixed window pages on a healthy broker whose `sys_interval` is longer.
+
+    `mosquitto_up` drops to zero between publishes, and the critical alert fires on a
+    broker that is working perfectly well.
+    """
+    registry = exporter.Registry(stale_after=900.0)
+    registry.update('$SYS/broker/uptime', '5 seconds', now=0.0)
+
+    assert registry.is_up(now=300.0)
+    assert not registry.is_up(now=1000.0)
+
+
+def test_the_connection_ceiling_is_exported():
+    """So that the alert threshold follows the configured limit, not a default."""
+    registry = exporter.Registry(max_connections=5000)
+
+    samples = {sample.name: sample.value for sample in registry.snapshot()}
+
+    assert samples['mosquitto_max_connections'] == 5000.0
+
+
+def test_an_unlimited_broker_exports_no_ceiling():
+    """A ratio alert against a limit that does not exist should never fire."""
+    registry = exporter.Registry()
+
+    assert 'mosquitto_max_connections' not in {sample.name for sample in registry.snapshot()}
+
+
+def test_the_parser_accepts_the_staleness_and_ceiling_options():
+    """These are how the charm passes the broker's configuration to the exporter."""
+    args = exporter.build_parser().parse_args(
+        ['--stale-after', '900', '--max-connections', '5000']
+    )
+
+    assert args.stale_after == 900.0
+    assert args.max_connections == 5000
+
+
+def test_the_options_have_conservative_defaults():
+    """Run by hand, with no charm to pass anything, nothing should page or lie."""
+    args = exporter.build_parser().parse_args([])
+
+    assert args.stale_after == exporter.STALE_AFTER
+    assert args.max_connections == -1

@@ -10,10 +10,14 @@ apt, systemd or a real broker is covered by the functional tests instead.
 
 from __future__ import annotations
 
+import collections.abc
+import contextlib
 import dataclasses
 import inspect
 import pathlib
+import socket
 import subprocess
+import threading
 
 import pytest
 
@@ -626,3 +630,197 @@ def test_adding_the_ppa_is_given_longer_than_the_default():
     assert 'add-apt-repository' in source
     line = next(line for line in source.splitlines() if 'add-apt-repository' in line)
     assert 'timeout=' in line, 'adding the PPA runs with the default 60s timeout'
+
+
+# --- Removing relation-owned material ----------------------------------------
+
+
+def layout(root: pathlib.Path) -> mosquitto.Paths:
+    """The archive layout, rebased under a temporary directory."""
+    return dataclasses.replace(
+        DEB,
+        config_file=root / 'mosquitto.conf',
+        conf_dir=root / 'conf.d',
+        password_file=root / 'passwd',
+        acl_file=root / 'acl',
+        persistence_dir=root / 'data',
+        log_file=root / 'log' / 'mosquitto.log',
+        certs_dir=root / 'certs',
+        backup_dir=root / 'backups',
+    )
+
+
+def test_removing_tls_material_takes_every_file(tmp_path: pathlib.Path):
+    """A private key outlives the integration that put it there unless something goes.
+
+    It is not what keeps a listener working — the broker stops referencing it as soon
+    as the TLS listeners go — but it is a key on a machine that no longer serves TLS,
+    and every later backup would carry it.
+    """
+    paths = layout(tmp_path)
+    paths.certs_dir.mkdir(parents=True)
+    for name in ('ca.crt', 'server.crt', 'server.key'):
+        (paths.certs_dir / name).write_text('material')
+
+    change = mosquitto.remove_tls_material(paths)
+
+    assert change is mosquitto.Change.RESTART
+    assert not list(paths.certs_dir.iterdir())
+
+
+def test_removing_tls_material_that_is_not_there_changes_nothing(tmp_path: pathlib.Path):
+    paths = layout(tmp_path)
+    paths.certs_dir.mkdir(parents=True)
+
+    assert mosquitto.remove_tls_material(paths) is mosquitto.Change.NONE
+
+
+def test_removing_tls_material_leaves_the_bridge_authority(tmp_path: pathlib.Path):
+    """The two are written by different integrations and go separately."""
+    paths = layout(tmp_path)
+    paths.certs_dir.mkdir(parents=True)
+    (paths.certs_dir / 'server.key').write_text('key')
+    bridge = paths.certs_dir / 'bridge-ca.crt'
+    bridge.write_text('upstream authority')
+
+    mosquitto.remove_tls_material(paths)
+
+    assert bridge.exists()
+
+
+def test_removing_the_bridge_authority(tmp_path: pathlib.Path):
+    paths = layout(tmp_path)
+    paths.certs_dir.mkdir(parents=True)
+    (paths.certs_dir / 'bridge-ca.crt').write_text('upstream authority')
+
+    assert mosquitto.remove_bridge_ca(paths) is mosquitto.Change.RESTART
+    assert not (paths.certs_dir / 'bridge-ca.crt').exists()
+
+
+def test_removing_a_bridge_authority_that_is_not_there(tmp_path: pathlib.Path):
+    paths = layout(tmp_path)
+    paths.certs_dir.mkdir(parents=True)
+
+    assert mosquitto.remove_bridge_ca(paths) is mosquitto.Change.NONE
+
+
+# --- Backups -----------------------------------------------------------------
+
+
+def test_a_backup_refuses_to_write_through_a_symlink(tmp_path: pathlib.Path):
+    """The backup is written as root, and the action's own check is a syscall earlier.
+
+    An operator who can run actions but not `juju ssh` could otherwise point the
+    destination at a symlink and have root follow it.
+    """
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+    target = tmp_path / 'somewhere-else'
+    link = tmp_path / 'backup.tar.gz'
+    link.symlink_to(target)
+
+    with pytest.raises(mosquitto.Error, match='could not write the backup'):
+        mosquitto.create_backup(paths, link)
+
+    assert not target.exists()
+
+
+def test_a_backup_refuses_a_destination_that_appeared(tmp_path: pathlib.Path):
+    """`O_EXCL`, so the gap between the action's check and this open is not a window."""
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+    destination = tmp_path / 'backup.tar.gz'
+    destination.write_text('someone got here first')
+
+    with pytest.raises(mosquitto.Error, match='could not write the backup'):
+        mosquitto.create_backup(paths, destination)
+
+    assert destination.read_text() == 'someone got here first'
+
+
+# --- WebSocket listeners -----------------------------------------------------
+
+
+@contextlib.contextmanager
+def websocket_server(response: bytes) -> collections.abc.Generator[int]:
+    """Serve one connection with a canned HTTP response, and yield the port."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+
+    def serve() -> None:
+        try:
+            connection, _ = listener.accept()
+        except OSError:
+            return
+        with connection:
+            connection.recv(4096)
+            connection.sendall(response)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        listener.close()
+        thread.join(timeout=5)
+
+
+def test_a_websocket_listener_that_upgrades_passes():
+    response = (
+        b'HTTP/1.1 101 Switching Protocols\r\n'
+        b'Upgrade: websocket\r\n'
+        b'Connection: Upgrade\r\n'
+        b'Sec-WebSocket-Protocol: mqtt\r\n\r\n'
+    )
+    with websocket_server(response) as port:
+        passed, message = mosquitto.websocket_check(host='127.0.0.1', port=port)
+
+    assert passed
+    assert 'WebSocket upgrade' in message
+
+
+def test_a_websocket_listener_that_does_not_upgrade_fails():
+    """A broker built without WebSocket support answers the port but not the upgrade."""
+    with websocket_server(b'HTTP/1.1 404 Not Found\r\n\r\n') as port:
+        passed, message = mosquitto.websocket_check(host='127.0.0.1', port=port)
+
+    assert not passed
+    assert '404' in message
+
+
+def test_a_websocket_listener_that_upgrades_without_mqtt_fails():
+    """Upgrading to something that is not MQTT is not a working MQTT listener."""
+    response = b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n'
+    with websocket_server(response) as port:
+        passed, message = mosquitto.websocket_check(host='127.0.0.1', port=port)
+
+    assert not passed
+    assert 'subprotocol' in message
+
+
+def test_a_websocket_listener_that_is_not_there_fails():
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    port = listener.getsockname()[1]
+    listener.close()
+
+    passed, message = mosquitto.websocket_check(host='127.0.0.1', port=port, timeout=2)
+
+    assert not passed
+    assert 'could not connect' in message
+
+
+def test_a_tls_websocket_listener_that_is_not_serving_tls_fails():
+    """A handshake the broker cannot complete is a failure, not an exception.
+
+    `ssl.SSLError` is an `OSError`, so TLS material the broker cannot read comes back
+    as a failed check rather than as a traceback in the action.
+    """
+    with websocket_server(b'HTTP/1.1 101 Switching Protocols\r\n\r\n') as port:
+        passed, message = mosquitto.websocket_check(
+            host='127.0.0.1', port=port, tls=True, timeout=5
+        )
+
+    assert not passed
+    assert 'failed' in message

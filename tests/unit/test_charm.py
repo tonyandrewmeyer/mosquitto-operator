@@ -17,7 +17,7 @@ import dataclasses
 import inspect
 import json
 import pathlib
-from typing import Any
+from typing import Any, cast
 
 import conftest
 import ops
@@ -386,7 +386,7 @@ def test_a_second_unit_blocks_and_the_workload_is_not_touched(
     A client that reconnected to the other one would find its session, queued messages
     and retained messages gone, so the charm refuses before it configures anything.
     """
-    state_in = make_state(peer=peer_relation(other_units=True))
+    state_in = make_state(peer=peer_relation(other_units=True), planned_units=2)
 
     state_out = ctx.run(ctx.on.config_changed(), state_in)
 
@@ -398,7 +398,7 @@ def test_a_second_unit_blocks_and_the_workload_is_not_touched(
 def test_the_scale_guard_holds_for_every_reconciling_event(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, event: str
 ):
-    state_in = make_state(peer=peer_relation(other_units=True))
+    state_in = make_state(peer=peer_relation(other_units=True), planned_units=2)
 
     ctx.run(getattr(ctx.on, event)(), state_in)
 
@@ -441,7 +441,7 @@ def test_status_names_the_offending_option(
 def test_status_when_the_deployment_is_scaled(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
-    state_in = make_state(peer=peer_relation(other_units=True))
+    state_in = make_state(peer=peer_relation(other_units=True), planned_units=2)
 
     state_out = ctx.run(ctx.on.update_status(), state_in)
 
@@ -533,18 +533,27 @@ def test_a_reload_the_broker_dies_on_is_noticed(
 
     On 2.0 there is no `--test-config` to have caught the bad configuration first, so
     without a look afterwards the hook would finish reporting active for a broker that
-    had already exited.
+    had already exited. The configuration that killed it is taken back off disk and
+    the broker is put back on the one it was serving, rather than being left down with
+    the bad configuration waiting for the next reboot or logrotate SIGHUP.
     """
-    fake.running = True
+    good = ctx.run(ctx.on.start(), make_state())
+    previous_config = fake.main_config
     fake.dies_on_apply = True
     fake.journal = 'Error: Invalid bridge configuration'
 
-    state_out = ctx.run(ctx.on.config_changed(), make_state(config={'max-connections': 500}))
+    state_out = ctx.run(
+        ctx.on.config_changed(),
+        dataclasses.replace(good, config={'max-connections': 500}),
+    )
 
     assert state_out.unit_status == testing.BlockedStatus(
-        'Mosquitto is not running — Mosquitto stopped while applying the configuration'
+        'the last change was not applied — Mosquitto stopped while applying the configuration'
     )
     assert any('Invalid bridge configuration' in line.message for line in ctx.juju_log)
+    assert 'restore_fragments' in fake.calls
+    assert fake.main_config == previous_config
+    assert fake.running
 
 
 def test_status_warns_about_anonymous_access(
@@ -2136,22 +2145,27 @@ def test_an_install_failure_blocks_rather_than_erroring_the_hook(
 def test_removing_the_extra_unit_returns_the_charm_to_active(
     fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
 ):
-    """Peer relation-departed is the only event the surviving unit gets.
+    """The charm recovers on goal state, not on peer relation membership.
 
-    The departing unit is still listed in `relation.units` while that hook runs, so a
-    scale check that counted it would leave the charm blocked with nothing left to
-    wake it — which is exactly what happened on Juju 4.0.
+    Juju 4.x does not remove a departed unit from a *peer* relation: `relation-list`
+    still returns it long afterwards and no departed hook ever fires. A charm that
+    counted peers would stay blocked for ever with nothing left to wake it, which is
+    exactly what happened. Goal state says one unit as soon as the operator removes
+    the other, and `update-status` is enough to act on it.
     """
     extra = testing.PeerRelation('mosquitto-peers', peers_data={1: {}})
-    state = testing.State(leader=True, relations={extra}, model=testing.Model(type='lxd'))
+    state = testing.State(
+        leader=True, relations={extra}, model=testing.Model(type='lxd'), planned_units=2
+    )
 
     blocked = ctx.run(ctx.on.relation_changed(extra), state)
     assert isinstance(blocked.unit_status, testing.BlockedStatus)
     assert 'does not cluster' in blocked.unit_status.message
 
+    # The removed unit is still in the peer relation, and there was no departed hook.
     out = ctx.run(
-        ctx.on.relation_departed(extra, remote_unit=1),
-        dataclasses.replace(blocked),
+        ctx.on.update_status(),
+        dataclasses.replace(blocked, planned_units=1),
     )
 
     assert out.unit_status == testing.ActiveStatus(
@@ -2178,3 +2192,527 @@ def test_status_while_waiting_for_a_certificate(
     assert out.unit_status == testing.ActiveStatus(
         'ready — waiting for a certificate to enable TLS'
     )
+
+
+# --------------------------------------------------------------------------------------
+# Applying a change the broker will not serve
+# --------------------------------------------------------------------------------------
+
+
+def test_a_change_that_leaves_the_broker_unable_to_serve_is_rolled_back(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """`systemctl is-active` is not the same as serving MQTT.
+
+    A configuration can leave the process up while breaking authentication, the ACL
+    file or the listener — and on the archive's 2.0 build there is no `--test-config`
+    to have caught any of it first. The round trip catches it, and the change comes
+    back off disk rather than waiting for the nightly logrotate SIGHUP to take the
+    broker down with it.
+    """
+    good = ctx.run(ctx.on.start(), make_state())
+    previous_config = fake.main_config
+    fake.health = (False, 'connection refused')
+
+    state_out = ctx.run(
+        ctx.on.config_changed(),
+        dataclasses.replace(good, config={'max-connections': 500}),
+    )
+
+    assert state_out.unit_status == testing.BlockedStatus(
+        'the last change was not applied — connection refused'
+    )
+    assert fake.main_config == previous_config
+    assert fake.running
+
+
+def test_an_unchanged_reconcile_does_not_pay_for_a_round_trip(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Every update-status would otherwise spend several seconds proving nothing."""
+    first = ctx.run(ctx.on.start(), make_state())
+    fake.calls.clear()
+
+    ctx.run(ctx.on.update_status(), first)
+
+    assert 'health_check' not in fake.calls
+
+
+def test_a_tls_only_broker_is_not_verified_with_a_round_trip(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, certificates: None
+):
+    """The round trip needs a plaintext listener on loopback, and there is not one."""
+    state_in = make_state(
+        relations=[testing.Relation('certificates', remote_app_name='ca')],
+        config={'port': 0},
+    )
+
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
+
+    assert 'health_check' not in fake.calls
+    assert state_out.unit_status == testing.ActiveStatus()
+
+
+# --------------------------------------------------------------------------------------
+# A configuration with nothing to listen on yet
+# --------------------------------------------------------------------------------------
+
+
+def test_tls_only_without_a_certificate_keeps_the_broker_down(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Mosquitto 2.x answers a configuration with no listener by making one.
+
+    That implicit listener is plaintext, on loopback, and is exactly what `port=0`
+    asked the broker not to do. Waiting is the only honest answer until a certificate
+    arrives.
+    """
+    state_in = make_state(
+        relations=[testing.Relation('certificates', remote_app_name='ca')],
+        config={'port': 0},
+    )
+
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
+
+    assert state_out.unit_status == testing.WaitingStatus(
+        'every listener is TLS, and there is no certificate to serve them with yet'
+    )
+    assert 'write_config' not in fake.calls
+    assert not fake.running
+
+
+def test_a_running_broker_is_stopped_when_its_last_listener_goes(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The certificate went away, so the TLS listeners it served are gone with it."""
+    fake.running = True
+    state_in = make_state(
+        relations=[testing.Relation('certificates', remote_app_name='ca')],
+        config={'port': 0},
+    )
+
+    ctx.run(ctx.on.config_changed(), state_in)
+
+    assert not fake.running
+    assert 'stop' in fake.calls
+
+
+def test_a_broker_that_will_not_stop_without_a_listener_does_not_error_the_hook(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    fake.running = True
+    fake.stop_error = 'Job for mosquitto.service failed'
+    state_in = make_state(
+        relations=[testing.Relation('certificates', remote_app_name='ca')],
+        config={'port': 0},
+    )
+
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
+
+    assert isinstance(state_out.unit_status, testing.WaitingStatus)
+
+
+# --------------------------------------------------------------------------------------
+# Relation-owned material is removed with its relation
+# --------------------------------------------------------------------------------------
+
+
+def test_losing_the_certificate_integration_removes_the_private_key(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """A key on a machine that no longer serves TLS is only ever a liability.
+
+    It is also swept into every later backup, which is the part that outlives the
+    unit.
+    """
+    fake.tls = mosquitto.TLSMaterial(certificate='cert', private_key='key', ca='ca')
+
+    ctx.run(ctx.on.config_changed(), make_state())
+
+    assert fake.tls is None
+    assert 'remove_tls_material' in fake.calls
+
+
+def test_material_is_kept_while_the_authority_has_not_reissued(
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """There are several hooks between asking for a renewal and getting one.
+
+    Deleting the key the broker is currently serving with, to tidy up, would take the
+    TLS listeners down in the middle of a renewal that was going to succeed.
+    """
+    fake.tls = mosquitto.TLSMaterial(certificate='cert', private_key='key', ca='ca')
+
+    def get_assigned_certificate(self: object, request: object) -> tuple[None, None]:
+        return None, None
+
+    monkeypatch.setattr(
+        'charmlibs.interfaces.tls_certificates.TLSCertificatesRequiresV4.get_assigned_certificate',
+        get_assigned_certificate,
+    )
+    state_in = make_state(relations=[testing.Relation('certificates', remote_app_name='ca')])
+
+    ctx.run(ctx.on.config_changed(), state_in)
+
+    assert fake.tls is not None
+    assert 'remove_tls_material' not in fake.calls
+
+
+def test_losing_the_upstream_integration_removes_the_bridge_authority(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    fake.bridge_ca = 'an upstream authority'
+
+    ctx.run(ctx.on.config_changed(), make_state())
+
+    assert fake.bridge_ca is None
+    assert 'remove_bridge_ca' in fake.calls
+
+
+# --------------------------------------------------------------------------------------
+# The exporter
+# --------------------------------------------------------------------------------------
+
+
+def test_the_exporter_listens_on_loopback(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The collector is a subordinate on this machine, scraping `localhost:<port>`.
+
+    The COS agent library builds that target itself, so an exporter bound to the
+    unit's own address serves the collector nothing — while exposing the broker's
+    internals to everything else on the network.
+    """
+    state_in = make_state(relations=[testing.Relation('cos-agent', remote_app_name='agent')])
+
+    ctx.run(ctx.on.config_changed(), state_in)
+
+    assert fake.exporter.listen_address == '127.0.0.1'
+
+
+def test_the_exporter_waits_for_several_sys_intervals(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """A fixed staleness window pages on a healthy broker that publishes slowly.
+
+    With `sys-interval` above the window, `mosquitto_up` drops to zero between
+    publishes and the critical alert fires on a broker that is working perfectly well.
+    """
+    state_in = make_state(
+        relations=[testing.Relation('cos-agent', remote_app_name='agent')],
+        config={'sys-interval': 300},
+    )
+
+    ctx.run(ctx.on.config_changed(), state_in)
+
+    assert fake.exporter.stale_after == 900
+
+
+def test_the_exporter_staleness_has_a_floor(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Three times the ten second default is not enough slack for a missed publish."""
+    state_in = make_state(relations=[testing.Relation('cos-agent', remote_app_name='agent')])
+
+    ctx.run(ctx.on.config_changed(), state_in)
+
+    assert fake.exporter.stale_after == 60
+
+
+def test_the_exporter_publishes_the_configured_connection_ceiling(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """So that the alert threshold follows `max-connections` rather than a default."""
+    state_in = make_state(
+        relations=[testing.Relation('cos-agent', remote_app_name='agent')],
+        config={'max-connections': 5000},
+    )
+
+    ctx.run(ctx.on.config_changed(), state_in)
+
+    assert fake.exporter.max_connections == 5000
+
+
+# --------------------------------------------------------------------------------------
+# The snap channel
+# --------------------------------------------------------------------------------------
+
+
+def test_changing_the_snap_channel_refreshes_the_snap(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The charm holds the snap, so nothing else ever moves it.
+
+    Without this the documented way to take a security update rewrites the charm's
+    record of the channel and leaves the broker on the revision it was installed with.
+    """
+    state_in = make_state(config={'install-source': 'snap'})
+    installed = ctx.run(ctx.on.config_changed(), state_in)
+    fake.installs.clear()
+
+    ctx.run(
+        ctx.on.config_changed(),
+        dataclasses.replace(
+            installed, config={'install-source': 'snap', 'package-channel': '2.1/stable'}
+        ),
+    )
+
+    assert fake.installs == [('snap', '2.1/stable')]
+
+
+def test_an_unchanged_snap_channel_does_not_refresh(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """A refresh on every hook would restart the broker whenever the store moved."""
+    state_in = make_state(config={'install-source': 'snap'})
+    installed = ctx.run(ctx.on.config_changed(), state_in)
+    fake.installs.clear()
+
+    ctx.run(ctx.on.config_changed(), installed)
+
+    assert fake.installs == []
+
+
+def test_the_channel_is_not_consulted_for_a_deb_install(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """`package-channel` is only read when the broker comes from the snap."""
+    installed = ctx.run(ctx.on.config_changed(), make_state())
+    fake.installs.clear()
+
+    ctx.run(
+        ctx.on.config_changed(),
+        dataclasses.replace(installed, config={'package-channel': '2.1/stable'}),
+    )
+
+    assert fake.installs == []
+
+
+# --------------------------------------------------------------------------------------
+# Storage
+# --------------------------------------------------------------------------------------
+
+
+def test_detaching_the_storage_stops_the_broker(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The persistence database is on that storage, and the broker holds it open.
+
+    Juju blocks the detach until this hook returns, so this is the only chance to have
+    the database written out where the volume will carry it.
+    """
+    storage = testing.Storage('data')
+    fake.running = True
+    state_in = make_state(storages={storage})
+
+    ctx.run(ctx.on.storage_detaching(storage), state_in)
+
+    assert not fake.running
+    assert not fake.exporter.installed
+
+
+def test_a_broker_that_will_not_stop_does_not_fail_the_detach(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Failing the hook would only have Juju retry the same detach."""
+    storage = testing.Storage('data')
+    fake.running = True
+    fake.stop_error = 'Job for mosquitto.service failed'
+
+    ctx.run(ctx.on.storage_detaching(storage), make_state(storages={storage}))
+
+    assert any('since the last autosave' in line.message for line in ctx.juju_log)
+
+
+# --------------------------------------------------------------------------------------
+# Actions report what really happened
+# --------------------------------------------------------------------------------------
+
+
+def test_set_password_fails_when_the_broker_did_not_take_it(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The secret holds the new password whether or not the broker accepted it.
+
+    Reporting success on the strength of the record alone tells the operator that a
+    credential works when every client using it is being refused.
+    """
+    fake.start_works = False
+
+    with pytest.raises(testing.ActionFailed) as failure:
+        ctx.run(ctx.on.action('set-password', params={'username': 'alice'}), make_state())
+
+    assert 'The change was recorded' in failure.value.message
+    # The secret id is still reported: an operator sorting out a blocked unit needs to
+    # know which password they are sorting out.
+    state_out = cast('testing.State', failure.value.state)
+    assert state_out.get_secret(label='mqtt-user-alice')
+
+
+def test_grant_fails_when_the_broker_did_not_take_it(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    fake.start_works = False
+    state_in = make_state(peer=peer_relation({'alice': {'owner': 'action', 'acl': []}}))
+
+    with pytest.raises(testing.ActionFailed) as failure:
+        ctx.run(
+            ctx.on.action('grant', params={'username': 'alice', 'topic': 'a/#'}),
+            state_in,
+        )
+
+    assert 'The change was recorded' in failure.value.message
+
+
+def test_resume_fails_when_the_broker_does_not_come_back(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    fake.start_works = False
+    state_in = make_state(peer=peer_relation(paused=True))
+
+    with pytest.raises(testing.ActionFailed) as failure:
+        ctx.run(ctx.on.action('resume'), state_in)
+
+    assert 'The change was recorded' in failure.value.message
+
+
+def test_pause_does_not_claim_a_broker_it_could_not_stop(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The paused flag also stops every later reconcile from looking.
+
+    Setting it before the stop leaves the charm reporting a paused broker that is
+    still serving every client on it, and nothing left to notice.
+    """
+    fake.running = True
+    fake.stop_error = 'Job for mosquitto.service failed'
+    peer = peer_relation()
+
+    with pytest.raises(testing.ActionFailed) as failure:
+        ctx.run(ctx.on.action('pause'), make_state(peer=peer))
+
+    assert 'Could not stop Mosquitto' in failure.value.message
+    state_out = cast('testing.State', failure.value.state)
+    databag = state_out.get_relation(peer.id).local_unit_data
+    assert databag.get('paused') != 'true'
+
+
+def test_restore_reports_a_broker_that_did_not_come_back(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, tmp_path: Any
+):
+    """The files are restored; what did not happen is the broker serving them.
+
+    Reporting `restored` here is how an operator ends up believing they have recovered
+    while every client is still disconnected.
+    """
+    backup = tmp_path / 'backup.tar.gz'
+    backup.write_bytes(b'not really a tarball')
+    fake.start_error = 'Job for mosquitto.service failed'
+
+    with pytest.raises(testing.ActionFailed) as failure:
+        ctx.run(
+            ctx.on.action('restore-backup', params={'path': str(backup)}),
+            make_state(),
+        )
+
+    assert 'would not start on it' in failure.value.message
+    assert fake.restored == [backup]
+
+
+# --------------------------------------------------------------------------------------
+# Checking the WebSocket listeners
+# --------------------------------------------------------------------------------------
+
+
+def test_health_check_covers_the_websocket_listener(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """A WebSocket-only deployment used to have no way to prove its only transport works."""
+    state_in = make_state(config={'port': 0, 'tls-port': 0, 'websockets-port': 9001})
+
+    out = ctx.run(ctx.on.action('health-check'), state_in)
+
+    assert ctx.action_results is not None
+    assert ctx.action_results['websockets'].startswith('ok: ')
+    assert fake.last_websocket_check == {
+        'host': '127.0.0.1',
+        'port': 9001,
+        'tls': False,
+        'cafile': None,
+    }
+    assert out is not None
+
+
+def test_health_check_fails_on_a_websocket_listener_that_does_not_upgrade(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    fake.websockets = (False, 'did not upgrade: HTTP/1.1 404 Not Found')
+    state_in = make_state(config={'websockets-port': 9001})
+
+    with pytest.raises(testing.ActionFailed) as failure:
+        ctx.run(ctx.on.action('health-check', params={'listener': 'websockets'}), state_in)
+
+    assert 'websockets' in failure.value.message
+
+
+def test_health_check_covers_the_tls_websocket_listener(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, certificates: None
+):
+    state_in = make_state(
+        relations=[testing.Relation('certificates', remote_app_name='ca')],
+        config={'tls-websockets-port': 8884},
+    )
+
+    ctx.run(ctx.on.action('health-check', params={'listener': 'websockets-tls'}), state_in)
+
+    assert fake.last_websocket_check['tls'] is True
+    assert fake.last_websocket_check['port'] == 8884
+    assert fake.last_websocket_check['cafile'] is not None
+
+
+def test_health_check_of_a_tls_websocket_listener_without_a_certificate(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    state_in = make_state(config={'tls-websockets-port': 8884})
+
+    with pytest.raises(testing.ActionFailed) as failure:
+        ctx.run(ctx.on.action('health-check', params={'listener': 'websockets-tls'}), state_in)
+
+    assert 'integrate a certificate authority' in failure.value.message
+
+
+# --------------------------------------------------------------------------------------
+# The default install source
+# --------------------------------------------------------------------------------------
+
+
+def test_status_warns_about_an_unsupported_archive_build(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Mosquitto is in universe on 24.04, so the default source has no security support.
+
+    It is documented, but an operator who deployed the charm without reading the
+    packaging analysis should not have to go looking for it.
+    """
+    fake.unpatched = '2.0.18-1build3'
+
+    state_out = ctx.run(ctx.on.update_status(), make_state())
+
+    assert state_out.unit_status == testing.ActiveStatus(
+        'ready — Mosquitto 2.0.18-1build3 comes from universe and has no standard '
+        'security support; set install-source=ppa, or attach Ubuntu Pro for the ESM build'
+    )
+
+
+def test_status_says_nothing_about_a_patched_build(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The ESM build is the same upstream version, so only the Debian revision says so."""
+    fake.unpatched = None
+
+    state_out = ctx.run(ctx.on.update_status(), make_state())
+
+    assert isinstance(state_out.unit_status, testing.ActiveStatus)
+    assert 'universe' not in state_out.unit_status.message

@@ -42,8 +42,9 @@ groups:
         annotations:
           summary: The Mosquitto broker is not responding.
           description: >-
-            No `$SYS` message has reached the exporter for over a minute, so the
-            broker is down, wedged, or refusing the exporter's credentials. Check
+            No `$SYS` message has reached the exporter for several `sys-interval`
+            periods, so the broker is down, wedged, or refusing the exporter's
+            credentials. Check
             `systemctl status mosquitto` and `journalctl -u mosquitto` on the
             unit. If the broker is running, check that the `_charm_metrics` user
             still exists in the password file and that the ACL grants it
@@ -62,8 +63,8 @@ groups:
             Prometheus cannot reach the exporter, so broker metrics are missing
             and every other rule in this file is blind. Check
             `systemctl status mosquitto-exporter` on the unit, and confirm that
-            the exporter is bound to the unit's private address on the configured
-            `metrics-port`.
+            the exporter is listening on `127.0.0.1` on the configured
+            `metrics-port`, which is where the co-located collector scrapes it.
 
       # The uptime counter went backwards, which only happens across a restart.
       - alert: MosquittoRestarted
@@ -80,22 +81,25 @@ groups:
             (`journalctl -k | grep -i oom`) or a crash, and check whether systemd
             is restarting the broker in a loop.
 
-      # Approaching the connection ceiling. The charm's `max-connections` default
-      # is 1024, so the threshold is 85% of that; retune this expression if the
-      # application is deployed with a different value.
+      # Approaching the connection ceiling. The threshold is a fraction of the
+      # limit the charm actually configured, which the exporter publishes as
+      # `mosquitto_max_connections`, rather than a number tied to one particular
+      # value of `max-connections`. A broker configured for unlimited connections
+      # exports no such gauge, so this rule correctly never fires there.
       - alert: MosquittoConnectionsNearLimit
-        expr: broker_clients_connected > 870
+        expr: >-
+          broker_clients_connected / mosquitto_max_connections > 0.85
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: Mosquitto is close to its connection limit.
           description: >-
-            {{ $value }} clients are connected, against a default
-            `max-connections` of 1024. New connections will be refused once the
-            limit is reached. Raise the `max-connections` charm config option,
-            which also raises `open-file-limit` unless that has been pinned, or
-            move some clients to another broker.
+            Connections are at {{ $value | humanizePercentage }} of the
+            configured `max-connections`. New connections will be refused once
+            the limit is reached. Raise the `max-connections` charm config
+            option, which also raises `open-file-limit` unless that has been
+            pinned, or move some clients to another broker.
 
       # The classic slow leak: durable sessions that nothing ever reconnects to.
       # Each one holds queued messages and subscription state for ever.

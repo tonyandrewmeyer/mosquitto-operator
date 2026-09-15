@@ -213,6 +213,25 @@ class MosquittoConfig(pydantic.BaseModel):
         return self
 
     @pydantic.model_validator(mode='after')
+    def _check_file_limit(self) -> MosquittoConfig:
+        """Reject a pinned descriptor limit the connection limit cannot fit inside.
+
+        Each connection costs a descriptor, so a limit at or below `max-connections`
+        means the broker starts refusing connections before it reaches the ceiling the
+        operator configured — and the only symptom is `accept: Too many open files` in
+        a log nobody is reading.
+        """
+        if self.open_file_limit and 0 < self.max_connections >= self.open_file_limit:
+            raise ValueError(
+                f'open-file-limit ({self.open_file_limit}) must be greater than '
+                f'max-connections ({self.max_connections}): each connection costs a '
+                f'file descriptor, and the listeners, the log and the persistence '
+                f'database need some too. Leave open-file-limit at 0 to have the charm '
+                f'size it, or set it to at least {self.max_connections + 1024}.'
+            )
+        return self
+
+    @pydantic.model_validator(mode='after')
     def _check_client_certificates(self) -> MosquittoConfig:
         """Reject `use-identity-as-username` without client certificates."""
         if self.use_identity_as_username and not self.require_client_certificate:
@@ -284,6 +303,11 @@ class SetPasswordParams(pydantic.BaseModel):
         """
         if value is None:
             return None
+        if not value:
+            # Distinguished from omission deliberately. `password=""` used to fall
+            # through to a generated password while the action reported that the
+            # operator's own password had been set.
+            raise ValueError('password must not be empty; omit it to generate one')
         if any(character in value for character in '\n\r\x00'):
             raise ValueError('password must not contain a line break or a null byte')
         return value
@@ -340,6 +364,8 @@ class Listener(enum.StrEnum):
 
     PLAIN = 'plain'
     TLS = 'tls'
+    WEBSOCKETS = 'websockets'
+    TLS_WEBSOCKETS = 'websockets-tls'
     ALL = 'all'
 
 

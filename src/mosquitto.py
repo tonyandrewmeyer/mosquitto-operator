@@ -11,6 +11,7 @@ be tested without a broker.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import dataclasses
 import enum
@@ -23,6 +24,8 @@ import pwd
 import re
 import secrets
 import shutil
+import socket
+import ssl
 import subprocess
 import tarfile
 import tempfile
@@ -870,6 +873,36 @@ def ensure_directories(file_paths: Paths) -> None:
     _chown(file_paths.log_file, file_paths.user, file_paths.group, 0o640)
 
 
+def unpatched_archive_build(install_source: str) -> str | None:
+    """Whether the installed broker is an archive build with no security support.
+
+    Mosquitto is in `universe` on Ubuntu 24.04, so `apt install mosquitto` gives a
+    2.0.18 build that receives no standard security updates and is missing the fixes
+    for CVE-2024-3935 and CVE-2024-10525. The patched build of the same upstream
+    version exists only in ESM Apps, and is distinguishable only by its Debian
+    revision, so the upstream version this module reports elsewhere cannot answer this.
+
+    Args:
+        install_source: One of `archive`, `ppa` or `snap`.
+
+    Returns:
+        The installed package version when it is an unsupported archive build, and None
+        when the deployment is patched, is not from the archive, or could not be
+        determined.
+    """
+    if install_source != 'archive':
+        return None
+    try:
+        package = apt.DebianPackage.from_installed_package(SERVER_PACKAGE)
+    except (apt.Error, OSError, subprocess.SubprocessError) as e:
+        # Only ever used to decorate a status, so an answer that cannot be had is not
+        # worth a warning on every update-status.
+        logger.debug('Could not determine the installed Mosquitto package version: %s', e)
+        return None
+    version = str(package.version)
+    return None if 'esm' in version else version
+
+
 def supports_test_config(version: str | None) -> bool:
     """Whether this version can check a configuration without running it.
 
@@ -1163,6 +1196,46 @@ def write_tls_material(file_paths: Paths, material: TLSMaterial) -> Change:
     return Change.RELOAD if any(changed) else Change.NONE
 
 
+def remove_tls_material(file_paths: Paths) -> Change:
+    """Delete the certificate, key and authority chain.
+
+    The broker stops referencing these as soon as the TLS listeners go, so this is not
+    what keeps a listener working. It is about not leaving a private key on a machine
+    that no longer serves TLS — and not sweeping it into every later backup.
+
+    Args:
+        file_paths: Where Mosquitto's files live.
+
+    Returns:
+        Whether the broker needs to be restarted to stop using them.
+    """
+    removed = False
+    for name in ('ca.crt', 'server.crt', 'server.key'):
+        path = file_paths.certs_dir / name
+        if path.exists():
+            path.unlink()
+            removed = True
+    # A restart rather than a reload: `certfile` and `keyfile` are restart-required
+    # directives, and the listener they belong to has gone with them.
+    return Change.RESTART if removed else Change.NONE
+
+
+def remove_bridge_ca(file_paths: Paths) -> Change:
+    """Delete the certificate authority used to verify the upstream broker.
+
+    Args:
+        file_paths: Where Mosquitto's files live.
+
+    Returns:
+        Whether the broker needs to be restarted to stop using it.
+    """
+    path = file_paths.certs_dir / 'bridge-ca.crt'
+    if not path.exists():
+        return Change.NONE
+    path.unlink()
+    return Change.RESTART
+
+
 def write_bridge_ca(file_paths: Paths, ca: str) -> Change:
     """Write the certificate authority used to verify the upstream broker.
 
@@ -1306,6 +1379,8 @@ def install_exporter(
     password: str,
     listen_address: str,
     listen_port: int,
+    stale_after: int,
+    max_connections: int,
 ) -> bool:
     """Install and configure the metrics exporter service.
 
@@ -1318,6 +1393,11 @@ def install_exporter(
         password: That user's password.
         listen_address: The address the exporter serves metrics on.
         listen_port: The port the exporter serves metrics on.
+        stale_after: How long the exporter may go without a `$SYS` message before it
+            reports the broker as down.
+        max_connections: The broker's connection ceiling, exported so that alerts can
+            be written against the configured limit rather than against a fixed number.
+            Negative for no limit, in which case nothing is exported.
 
     Returns:
         Whether anything changed, and so whether the service needs restarting.
@@ -1348,6 +1428,7 @@ ExecStart=/usr/bin/python3 {EXPORTER_INSTALL_PATH} \\
     --broker-host {broker_host} --broker-port {broker_port} \\
     --username {username} --password-file %d/mqtt-password \\
     --listen-address {listen_address} --listen-port {listen_port} \\
+    --stale-after {stale_after} --max-connections {max_connections} \\
     --mosquitto-sub-path {file_paths.sub_tool}
 LoadCredential=mqtt-password:{password_file}
 Restart=always
@@ -1627,6 +1708,69 @@ HEALTH_TOPIC_PREFIX = 'charm/health'
 """The topic prefix health checks use, and the only thing the health user may touch."""
 
 
+def websocket_check(
+    *,
+    host: str,
+    port: int,
+    tls: bool = False,
+    cafile: pathlib.Path | None = None,
+    timeout: int = 10,
+) -> tuple[bool, str]:
+    """Check that a WebSocket listener is serving MQTT.
+
+    The Mosquitto client tools speak MQTT over TCP only, so this cannot be the same
+    QoS 1 round trip `health_check` does. It goes as far as anything without an MQTT
+    WebSocket client can: open the connection, complete the TLS handshake where there
+    is one, and perform the HTTP upgrade Mosquitto answers for `mqtt`. That covers the
+    failures that actually happen here — a build without WebSocket support, a listener
+    that is not up, and TLS material the broker cannot read.
+
+    Args:
+        host: The broker address to connect to.
+        port: The broker port to connect to.
+        tls: Whether to connect over TLS.
+        cafile: The authority certificate, when checking a TLS listener.
+        timeout: How long to wait for the upgrade, in seconds.
+
+    Returns:
+        Whether the check passed, and a message describing the outcome.
+    """
+    key = base64.b64encode(secrets.token_bytes(16)).decode()
+    request = (
+        # Mosquitto serves MQTT over WebSockets at the root path.
+        f'GET / HTTP/1.1\r\n'
+        f'Host: {host}:{port}\r\n'
+        f'Upgrade: websocket\r\n'
+        f'Connection: Upgrade\r\n'
+        f'Sec-WebSocket-Key: {key}\r\n'
+        f'Sec-WebSocket-Version: 13\r\n'
+        f'Sec-WebSocket-Protocol: mqtt\r\n'
+        f'\r\n'
+    ).encode()
+    try:
+        connection = socket.create_connection((host, port), timeout=timeout)
+    except OSError as e:
+        return False, f'could not connect to {host}:{port}: {e}'
+    try:
+        if tls:
+            context = ssl.create_default_context(cafile=str(cafile) if cafile else None)
+            connection = context.wrap_socket(connection, server_hostname=host)
+        connection.sendall(request)
+        response = connection.recv(4096).decode('utf-8', errors='replace')
+    except OSError as e:
+        # `ssl.SSLError` is an `OSError`, so a handshake the broker cannot complete --
+        # an unreadable key, an expired certificate -- lands here too.
+        return False, f'the WebSocket upgrade on {host}:{port} failed: {e}'
+    finally:
+        connection.close()
+    status = response.split('\r\n', 1)[0].strip()
+    if '101' not in status.split():
+        return False, f'{host}:{port} did not upgrade: {status or "no response"}'
+    if 'mqtt' not in response.lower():
+        return False, f'{host}:{port} upgraded without accepting the mqtt subprotocol'
+    return True, f'{host}:{port} completed a WebSocket upgrade for mqtt'
+
+
 def sys_snapshot(
     file_paths: Paths,
     *,
@@ -1705,8 +1849,13 @@ def create_backup(file_paths: Paths, destination: pathlib.Path | None = None) ->
     # The tarball holds password hashes and, on a TLS unit, the private key, so it is
     # created private rather than created at the umask and chmodded afterwards --
     # which would leave a window in which anyone could read it.
+    #
+    # `O_EXCL | O_NOFOLLOW` rather than `O_TRUNC`: the action checks that the
+    # destination does not exist, but that check and this open are two syscalls with a
+    # gap between them, and the backup runs as root. Refusing outright to write through
+    # a symlink, or to a file that appeared in the gap, closes it.
     try:
-        handle = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        handle = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with open(handle, 'wb') as raw, tarfile.open(fileobj=raw, mode='w:gz') as archive:
             for path in sources:
                 archive.add(path, arcname=str(path).lstrip('/'))
