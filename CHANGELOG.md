@@ -7,10 +7,10 @@ The format is based on
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for its
 commit messages.
 
-Charm revisions are published to [Charmhub](https://charmhub.io/mosquitto).
-Each release below notes the Charmhub revision it corresponds to, where one was
-published. Unlike a library, this charm has no independent version number: the
-revision is the version.
+The charm is not published on Charmhub yet; build it from this repository. Once
+it is, each release below will note the Charmhub revision it corresponds to:
+unlike a library, a charm has no independent version number, so the revision is
+the version.
 
 Add entries for user-visible changes under `## [Unreleased]` as you work. When
 a revision is published, `[Unreleased]` is renamed to the release heading and a
@@ -121,6 +121,17 @@ description of what the charm does rather than a list of changes to it.
   snap`: the log lives under `/var/snap`, outside the trees the COS machine
   collectors scrape, and strict confinement means the broker cannot write to
   `/var/log`.
+- A reload the broker accepts and then exits on is noticed inside the hook that
+  caused it. `systemctl reload` is asynchronous and reports success either way,
+  and Mosquitto 2.0 has no `--test-config` to have rejected the configuration
+  first, so the unit went on reporting active for a broker that had stopped.
+- `last-log` reads the broker's log file as well as the journal. The broker is
+  configured with `log_dest file`, so anything that went wrong after it opened
+  that file was not in what the charm put in front of the operator.
+- The `grafana_agent.cos_agent` library is pinned to the exact revision
+  committed in `lib/`, so packing cannot pick up a different one than the tests
+  ran against.
+- `links.documentation` points at the documentation rather than the README.
 - Changing `bridge-topics` now republishes the request to the upstream broker,
   so the new topics are actually granted. The bridge previously forwarded
   topics the upstream broker had never granted it, and carried no traffic on

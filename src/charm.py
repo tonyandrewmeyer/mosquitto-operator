@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import pathlib
@@ -125,7 +126,9 @@ class MosquittoCharm(ops.CharmBase):
 
     # --- Configuration -------------------------------------------------------
 
-    @property
+    # Cached because almost every method here asks for the configuration, and the
+    # charm's configuration cannot change within a hook.
+    @functools.cached_property
     def _config(self) -> config.MosquittoConfig | None:
         """The charm's configuration, or None if it is invalid.
 
@@ -137,7 +140,7 @@ class MosquittoCharm(ops.CharmBase):
         except (pydantic.ValidationError, ValueError):
             return None
 
-    @property
+    @functools.cached_property
     def _config_error(self) -> str | None:
         """The first configuration error, phrased for an operator."""
         try:
@@ -532,10 +535,18 @@ class MosquittoCharm(ops.CharmBase):
                 mosquitto.start(paths)
             else:
                 mosquitto.apply(paths, mosquitto.merge_changes(changes))
+                # `systemctl reload` is asynchronous and succeeds even for a
+                # configuration the broker then rejects, on which it exits -- and on
+                # 2.0 there is no `--test-config` to have caught that beforehand. One
+                # more systemctl call turns "active, and dead by the time anyone
+                # looks" into a blocked unit inside the hook that caused it.
+                if not mosquitto.is_running(paths):
+                    raise mosquitto.ServiceError(
+                        'Mosquitto stopped while applying the configuration'
+                    )
         except mosquitto.ServiceError as e:
-            # `systemctl reload` in particular is asynchronous and succeeds even for a
-            # configuration the broker then rejects, so the journal is the only place
-            # that says what was actually wrong with it.
+            # The journal and the broker's own log are the only places that say what
+            # was actually wrong with it.
             self._service_error = str(e)
             logger.error('Mosquitto would not come up: %s', e)
             for line in mosquitto.last_log(paths).splitlines():

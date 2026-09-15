@@ -423,8 +423,17 @@ def test_the_charm_owns_the_main_configuration(broker: mosquitto.Paths):
     assert 'persistence_location' in original.read_text()
 
 
-def test_last_log_reads_the_journal(broker: mosquitto.Paths):
-    """It is what the charm puts in front of an operator when the broker will not start."""
-    journal = mosquitto.last_log(broker, lines=5)
+def test_last_log_reads_the_journal_and_the_log_file(broker: mosquitto.Paths):
+    """It is what the charm puts in front of an operator when the broker will not start.
 
-    assert 'mosquitto' in journal.lower()
+    Both sources: the broker is configured with `log_dest file`, so anything that goes
+    wrong after it opens that file is not in the journal at all.
+    """
+    broker.log_file.parent.mkdir(parents=True, exist_ok=True)
+    with broker.log_file.open('a') as log:
+        log.write('1970-01-01: a line only the log file has\n')
+
+    logs = mosquitto.last_log(broker, lines=5)
+
+    assert 'mosquitto' in logs.lower()
+    assert 'a line only the log file has' in logs

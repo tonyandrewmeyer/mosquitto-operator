@@ -132,6 +132,7 @@ class FakeMosquitto:
         self.exporter_start_error: str | None = None
         self.stop_error: str | None = None
         self.apply_error: str | None = None
+        self.dies_on_apply = False
         self.journal = ''
 
     # --- Layout -------------------------------------------------------------------
@@ -318,6 +319,10 @@ class FakeMosquitto:
         self.last_change = change
         if self.apply_error is not None:
             raise mosquitto.ServiceError(self.apply_error)
+        if self.dies_on_apply:
+            # A reload the broker accepts and then exits on, which is what a bad
+            # configuration does on 2.0: `systemctl reload` still reports success.
+            self.running = False
 
     def last_log(self, file_paths: mosquitto.Paths, lines: int = 20) -> str:
         self.calls.append('last_log')

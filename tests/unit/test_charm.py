@@ -526,6 +526,27 @@ def test_a_failed_reload_does_not_error_the_hook(
     assert any(line.message.startswith('mosquitto: ') for line in ctx.juju_log)
 
 
+def test_a_reload_the_broker_dies_on_is_noticed(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """`systemctl reload` is asynchronous and reports success either way.
+
+    On 2.0 there is no `--test-config` to have caught the bad configuration first, so
+    without a look afterwards the hook would finish reporting active for a broker that
+    had already exited.
+    """
+    fake.running = True
+    fake.dies_on_apply = True
+    fake.journal = 'Error: Invalid bridge configuration'
+
+    state_out = ctx.run(ctx.on.config_changed(), make_state(config={'max-connections': 500}))
+
+    assert state_out.unit_status == testing.BlockedStatus(
+        'Mosquitto is not running — Mosquitto stopped while applying the configuration'
+    )
+    assert any('Invalid bridge configuration' in line.message for line in ctx.juju_log)
+
+
 def test_status_warns_about_anonymous_access(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):

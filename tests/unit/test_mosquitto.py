@@ -10,6 +10,7 @@ apt, systemd or a real broker is covered by the functional tests instead.
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import pathlib
 import subprocess
@@ -504,6 +505,39 @@ def test_render_bridge_config_refuses_an_injected_directive(field: str):
 
     with pytest.raises(ValueError, match='line break'):
         mosquitto.render_bridge_config(bridge(**{field: injection}), DEB)
+
+
+# --- Logs --------------------------------------------------------------------
+
+
+def test_last_log_reads_the_log_file(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    """`log_dest file` means the journal is not the whole story.
+
+    Anything that goes wrong after the broker opens its log file is in the file alone,
+    which is most of what an operator needs when a reload was rejected.
+    """
+
+    def no_journal(*args: object, **kwargs: object) -> object:
+        raise OSError('no journalctl here')
+
+    monkeypatch.setattr(mosquitto, '_run', no_journal)
+    log_file = tmp_path / 'mosquitto.log'
+    log_file.write_text(''.join(f'line {number}\n' for number in range(100)))
+    paths = dataclasses.replace(DEB, log_file=log_file)
+
+    assert mosquitto.last_log(paths, lines=3).splitlines() == ['line 97', 'line 98', 'line 99']
+
+
+def test_last_log_survives_a_missing_log_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    def no_journal(*args: object, **kwargs: object) -> object:
+        raise OSError('no journalctl here')
+
+    monkeypatch.setattr(mosquitto, '_run', no_journal)
+    paths = dataclasses.replace(DEB, log_file=tmp_path / 'nothing-here.log')
+
+    assert mosquitto.last_log(paths) == ''
 
 
 # --- Versions ----------------------------------------------------------------

@@ -26,7 +26,7 @@ description: |
   messaging without a distributed message bus.
 
 links:
-  documentation: https://github.com/tonyandrewmeyer/mosquitto-operator/blob/main/README.md
+  documentation: https://github.com/tonyandrewmeyer/mosquitto-operator/blob/main/docs/index.md
   website: https://mosquitto.org/
   source: https://github.com/tonyandrewmeyer/mosquitto-operator
   issues: https://github.com/tonyandrewmeyer/mosquitto-operator/issues
@@ -50,7 +50,10 @@ parts:
 # Charmhub. Everything else comes from the `charmlibs-*` namespace on PyPI.
 charm-libs:
   - lib: grafana_agent.cos_agent
-    version: "0"
+    # The exact revision that is committed in `lib/`, not just the API version:
+    # "0" fetches the newest v0 at pack time, so a packed charm could quietly
+    # differ from the one the tests ran against.
+    version: "0.27"
 
 config:
   options:

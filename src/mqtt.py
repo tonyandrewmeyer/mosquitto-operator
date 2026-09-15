@@ -44,9 +44,6 @@ DEFAULT_PROVIDER_RELATION_NAME = 'mqtt'
 DEFAULT_REQUIRER_RELATION_NAME = 'upstream'
 """The endpoint name the Mosquitto charm conventionally consumes the interface on."""
 
-INTERFACE_VERSION = 0
-"""The version of the `mqtt` interface that this module speaks."""
-
 
 class MQTTError(Exception):
     """Raised when the interface cannot do what was asked of it."""

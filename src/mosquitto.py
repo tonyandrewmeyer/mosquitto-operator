@@ -1450,7 +1450,20 @@ def reset_failed(file_paths: Paths) -> None:
 
 
 def last_log(file_paths: Paths, lines: int = 20) -> str:
-    """Return the tail of the broker's journal, for reporting why it would not start."""
+    """Return the tail of the broker's logs, for reporting why it would not start.
+
+    Both the journal and the log file: the broker is configured with `log_dest file`, so
+    everything after it opens that file goes there and not to the journal, while a
+    failure to parse the configuration happens before there is a file to write to.
+
+    Args:
+        file_paths: Where Mosquitto's files live.
+        lines: How many lines to take from each source.
+
+    Returns:
+        The lines, or an empty string if neither source could be read.
+    """
+    collected: list[str] = []
     try:
         result = _run(
             ['/usr/bin/journalctl', '-u', file_paths.service, '-n', str(lines), '--no-pager'],
@@ -1458,8 +1471,21 @@ def last_log(file_paths: Paths, lines: int = 20) -> str:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return ''
-    return result.stdout
+        pass
+    else:
+        collected.extend(result.stdout.splitlines())
+    try:
+        # The log can be large, and this runs on the path where the broker is already
+        # refusing to start, so read the tail rather than the file.
+        with file_paths.log_file.open('rb') as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 8192))
+            tail = log.read().decode('utf-8', errors='replace')
+    except OSError:
+        pass
+    else:
+        collected.extend(tail.splitlines()[-lines:])
+    return '\n'.join(collected)
 
 
 def start(file_paths: Paths) -> None:
