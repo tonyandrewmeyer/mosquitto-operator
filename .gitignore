@@ -42,6 +42,7 @@ env/
 .coverage
 .coverage.*
 coverage.xml
+coverage-functional.xml
 htmlcov/
 .benchmarks/
 junit*.xml

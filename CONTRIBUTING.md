@@ -89,7 +89,10 @@ safe to run on a laptop with no controller and no Mosquitto installed.
 - **Unit tests** use
   [`ops.testing`](https://documentation.ubuntu.com/ops/latest/reference/ops-testing/)
   and need no Juju controller. `tox -e unit` also writes `coverage.xml`, which
-  CI uploads.
+  CI uploads. Its `fail_under = 80` counts the unit suite alone, and the unit
+  suite deliberately does not reach the half of `src/mosquitto.py` that talks to
+  apt, systemd and a real broker — `tox -e functional` reports coverage of that
+  separately, as `coverage-functional.xml`, ungated.
 - **Functional tests** exercise the workload-interaction code against a real
   Mosquitto installation, without Juju in the picture. They install packages and
   drive systemd, so they need root and only run when

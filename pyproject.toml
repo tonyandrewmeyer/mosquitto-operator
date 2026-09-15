@@ -45,6 +45,9 @@ unit = [
     "pytest~=9.1",
 ]
 functional = [
+    # These are the only tests that reach the I/O half of src/mosquitto.py, so
+    # they report their own coverage -- the unit gate cannot see it.
+    "coverage[toml]~=7.16",
     "pytest~=9.1",
 ]
 integration = [

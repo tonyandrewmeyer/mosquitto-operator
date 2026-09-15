@@ -393,6 +393,7 @@ dependencies = [
 
 [package.dev-dependencies]
 functional = [
+    { name = "coverage" },
     { name = "pytest" },
 ]
 integration = [
@@ -425,7 +426,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-functional = [{ name = "pytest", specifier = "~=9.1" }]
+functional = [
+    { name = "coverage", extras = ["toml"], specifier = "~=7.16" },
+    { name = "pytest", specifier = "~=9.1" },
+]
 integration = [
     { name = "jubilant", specifier = ">=1.13,<2" },
     { name = "pytest", specifier = "~=9.1" },
