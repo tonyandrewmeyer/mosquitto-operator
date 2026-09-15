@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="Mosquitto MQTT broker">
+  <title>Mosquitto</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3C4E63"/>
+      <stop offset="1" stop-color="#1E2A38"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="50" cy="50" r="50" fill="url(#bg)"/>
+
+  <!-- Publish/subscribe arcs radiating from the broker. -->
+  <g fill="none" stroke="#7FD1C1" stroke-linecap="round" opacity="0.85">
+    <path d="M27 50a23 23 0 0 1 23-23" stroke-width="3"/>
+    <path d="M73 50a23 23 0 0 1-23 23" stroke-width="3"/>
+    <path d="M19 50a31 31 0 0 1 12.5-24.9" stroke-width="2" opacity="0.5"/>
+    <path d="M81 50a31 31 0 0 1-12.5 24.9" stroke-width="2" opacity="0.5"/>
+  </g>
+
+  <!-- Mosquito: body, proboscis, legs and wings. -->
+  <g stroke="#F6F7F9" stroke-linecap="round" fill="none">
+    <path d="M60 41 L41 57" stroke-width="7"/>
+    <path d="M62.5 38.5 L74 27" stroke-width="2.4"/>
+    <g stroke-width="2" opacity="0.9">
+      <path d="M55 46 L58 33"/>
+      <path d="M50 51 L44 39"/>
+      <path d="M46 55 L33 58"/>
+      <path d="M56 45 L69 48"/>
+    </g>
+  </g>
+  <g fill="#7FD1C1" opacity="0.55">
+    <ellipse cx="55" cy="36" rx="12.5" ry="5" transform="rotate(-27 55 36)"/>
+    <ellipse cx="46" cy="44" rx="11" ry="4.2" transform="rotate(-8 46 44)"/>
+  </g>
+  <circle cx="63.5" cy="37.5" r="3.6" fill="#F6F7F9"/>
+</svg>
