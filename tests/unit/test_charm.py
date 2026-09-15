@@ -1642,15 +1642,37 @@ def test_the_exporter_goes_away_when_sys_is_switched_off(
 def test_the_exporter_needs_the_plaintext_listener(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
+    """A standing condition belongs in the status, not in every update-status."""
     state_in = make_state(
         relations=[testing.Relation('cos-agent', remote_app_name='agent')],
         config={'port': 0, 'websockets-port': 9001},
     )
 
-    ctx.run(ctx.on.config_changed(), state_in)
+    state_out = ctx.run(ctx.on.config_changed(), state_in)
 
     assert not fake.exporter.installed
-    assert any('plaintext listener' in line.message for line in ctx.juju_log)
+    assert state_out.unit_status == testing.ActiveStatus(
+        'ready — metrics are not being exported: the exporter needs the plaintext '
+        'listener, which port=0 disables'
+    )
+
+
+def test_a_stopped_exporter_is_started_again(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """The check here used to be on the broker, which is always running by then.
+
+    systemd's `Restart=always` covers a crash, but not a start failure that latches or
+    an operator who stopped the service by hand, so nothing ever brought it back.
+    """
+    state_in = make_state(relations=[testing.Relation('cos-agent', remote_app_name='agent')])
+    state_in = ctx.run(ctx.on.config_changed(), state_in)
+    assert fake.exporter.running
+    fake.exporter.running = False
+
+    ctx.run(ctx.on.update_status(), state_in)
+
+    assert fake.exporter.running
 
 
 # --------------------------------------------------------------------------------------

@@ -1369,15 +1369,27 @@ WantedBy=multi-user.target
 
 
 def remove_exporter() -> None:
-    """Stop and remove the metrics exporter service."""
+    """Stop and remove the metrics exporter service, and the credentials it used."""
     unit = pathlib.Path(f'/etc/systemd/system/{EXPORTER_SERVICE}.service')
-    if not unit.exists():
-        return
-    with contextlib.suppress(systemd.SystemdError):
-        systemd.service_stop(EXPORTER_SERVICE)
-        systemd.service_disable(EXPORTER_SERVICE)
-    unit.unlink()
-    systemd.daemon_reload()
+    if unit.exists():
+        with contextlib.suppress(systemd.SystemdError):
+            systemd.service_stop(EXPORTER_SERVICE)
+            systemd.service_disable(EXPORTER_SERVICE)
+        unit.unlink()
+        systemd.daemon_reload()
+    # The password is a live broker credential, so it goes with the service rather than
+    # staying on a machine the charm may no longer be on. This is outside the `exists`
+    # check above on purpose: an interrupted install can leave the password without the
+    # unit file.
+    shutil.rmtree(EXPORTER_INSTALL_PATH.parent, ignore_errors=True)
+
+
+def exporter_running() -> bool:
+    """Whether the metrics exporter is running."""
+    try:
+        return systemd.service_running(EXPORTER_SERVICE)
+    except systemd.SystemdError:
+        return False
 
 
 def start_exporter() -> None:

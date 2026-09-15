@@ -87,6 +87,15 @@ description of what the charm does rather than a list of changes to it.
 - A unit that is not the leader no longer errors its hook when a client's
   relation departs, or when it reconciles before leadership is settled. It waits
   instead, and `leader-elected` is now observed so that something wakes it.
+- The metrics exporter is started again when it is not running. The check was
+  against the broker's service, which is always running by that point, so an
+  exporter that failed to start or was stopped by hand stayed down.
+- `remove-exporter` takes the exporter's MQTT password with it. It was left on
+  the machine, readable by root, after the application was removed.
+- The `cos-agent` endpoint declares `limit: 1`, as the library it implements
+  asks for.
+- The exporter reports a disabled plaintext listener through the unit status
+  rather than logging the same warning on every update-status for ever.
 - Changing `bridge-topics` now republishes the request to the upstream broker,
   so the new topics are actually granted. The bridge previously forwarded
   topics the upstream broker had never granted it, and carried no traffic on

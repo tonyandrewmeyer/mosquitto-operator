@@ -339,6 +339,9 @@ class FakeMosquitto:
         self.exporter.password = password
         return dataclasses.replace(self.exporter, running=previous.running) != previous
 
+    def exporter_running(self) -> bool:
+        return self.exporter.running
+
     def start_exporter(self) -> None:
         self.calls.append('start_exporter')
         if self.exporter_start_error is not None:

@@ -769,9 +769,10 @@ class MosquittoCharm(ops.CharmBase):
             mosquitto.remove_exporter()
             return
         if not settings.port:
-            logger.warning(
-                'The metrics exporter needs the plaintext listener, which is disabled; '
-                'not starting it.'
+            # Through the status rather than the log: this is a standing condition, and
+            # every update-status would otherwise repeat the same warning for ever.
+            self._exporter_error = (
+                'the exporter needs the plaintext listener, which port=0 disables'
             )
             mosquitto.remove_exporter()
             return
@@ -786,7 +787,11 @@ class MosquittoCharm(ops.CharmBase):
             listen_address=address,
             listen_port=settings.metrics_port,
         )
-        if changed or not mosquitto.is_running(paths):
+        # `is_running(paths)` would be the *broker*, which is running by the time we get
+        # here, so a stopped or failed exporter would never be started again. Restarting
+        # is cheap and idempotent, but a needless restart is a gap in the metrics, so
+        # only do it when there is a reason to.
+        if changed or not mosquitto.exporter_running():
             mosquitto.start_exporter()
 
     def _bind_address(self) -> str | None:
