@@ -39,9 +39,7 @@ def service_is_running(juju: jubilant.Juju, unit: str, service: str = 'mosquitto
     `systemctl is-active` exits non-zero for a stopped service, and `Juju.exec` raises
     on a non-zero exit, so this has to tolerate failure rather than treat it as one.
     """
-    result = exec_allowed_to_fail(
-        juju, unit, f'/bin/sh -c "systemctl is-active {service}"'
-    )
+    result = exec_allowed_to_fail(juju, unit, f'/bin/sh -c "systemctl is-active {service}"')
     return result is not None and result.stdout.strip() == 'active'
 
 
