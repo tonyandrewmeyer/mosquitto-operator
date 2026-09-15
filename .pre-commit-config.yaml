@@ -1,0 +1,97 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+#
+# Tool versions for ruff, codespell and pyright come from uv.lock: these hooks
+# deliberately use `language: system` plus `uv run --frozen`, so that there is
+# exactly one source of truth for those versions and no `rev:` to keep in step.
+# The repositories below are pinned normally, because those tools are not in
+# uv.lock at all.
+#
+# Install with:  uv tool install pre-commit && pre-commit install
+# Or with prek, a faster drop-in that reads this same file:
+#                uv tool install prek && prek install
+#
+# See CONTRIBUTING.md.
+
+minimum_pre_commit_version: "4.0.0"
+
+ci:
+  # These same checks run in GitHub Actions via tox; no autofix pull requests.
+  skip: [ruff-format, ruff-check, codespell, pyright]
+
+repos:
+  # Generic hygiene. Not Python tools, so pinning a rev here is correct.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-merge-conflict
+      - id: check-shebang-scripts-are-executable
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-vcs-permalinks
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^lib/
+      - id: destroyed-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^(lib/|LICENSE$)
+      - id: fix-byte-order-marker
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+        exclude: ^lib/
+
+  # Lock file freshness. Keep the rev roughly in step with the uv you use;
+  # Dependabot does not manage it, so bump it by hand occasionally.
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.9.18
+    hooks:
+      - id: uv-lock
+
+  # GitHub Actions static analysis. zizmor is not in uv.lock either.
+  # NB: the hook runs offline unless GH_TOKEN is set, so the CI workflow
+  # remains the real gate.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.30.1
+    hooks:
+      - id: zizmor
+
+  # Python tools, at the versions resolved from uv.lock.
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        # --force-exclude is essential: pre-commit passes explicit filenames,
+        # and without it ruff ignores its own extend-exclude and reformats lib/.
+        entry: uv run --frozen --only-group lint ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --frozen --only-group lint ruff check --force-exclude --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: codespell
+        name: codespell
+        entry: uv run --frozen --only-group lint codespell
+        language: system
+        types: [text]
+        exclude: ^(lib/|docs/research/|uv\.lock$|.*\.svg$)
+
+      - id: pyright
+        name: pyright
+        # Type checking a subset of files gives wrong answers, so this one
+        # ignores the filenames pre-commit passes and checks the project.
+        entry: uv run --frozen --group lint --group unit --group functional --group integration pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true

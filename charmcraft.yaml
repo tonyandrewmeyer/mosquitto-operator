@@ -2,19 +2,35 @@
 # See https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/
 type: charm
 name: mosquitto
-title: Charm Template
-summary: A very short one-line summary of the charm.
+title: Mosquitto
+summary: Eclipse Mosquitto, an open-source MQTT message broker.
 description: |
-  A single sentence that says what the charm is, concisely and memorably.
+  Eclipse Mosquitto is a lightweight, open-source MQTT broker. It implements MQTT
+  5.0, 3.1.1 and 3.1, and is the de facto default broker for IoT and edge messaging.
 
-  A paragraph of one to three short sentences, that describe what the charm does.
+  This charm installs and operates Mosquitto on a machine: it renders the broker
+  configuration from Juju config, manages MQTT users and topic ACLs, obtains TLS
+  certificates from a certificate authority charm, exports broker metrics to
+  Prometheus, and knows the difference between a change that needs a reload and one
+  that needs a restart — so most reconfiguration does not drop a single client
+  connection.
 
-  A third paragraph that explains what need the charm meets.
+  Related applications request MQTT credentials and topic permissions over the `mqtt`
+  interface, and receive them through a Juju secret. Two Mosquitto applications can be
+  integrated with each other to configure a bridge, which is how hub-and-spoke and
+  edge-to-central topologies are built.
 
-  Finally, a paragraph that describes whom the charm is useful for.
+  Mosquitto is a single-node broker: it does not cluster, and this charm runs exactly
+  one unit. It suits IoT and edge gateways, building and industrial telemetry,
+  home and lab automation, and any service that needs reliable publish/subscribe
+  messaging without a distributed message bus.
 
-# Documentation:
-# https://documentation.ubuntu.com/charmcraft/stable/howto/build-guides/select-platforms/
+links:
+  documentation: https://github.com/tonyandrewmeyer/mosquitto-operator/blob/main/README.md
+  website: https://mosquitto.org/
+  source: https://github.com/tonyandrewmeyer/mosquitto-operator
+  issues: https://github.com/tonyandrewmeyer/mosquitto-operator/issues
+
 base: ubuntu@24.04
 platforms:
   amd64:
@@ -30,20 +46,420 @@ parts:
     build-snaps:
       - astral-uv
 
-# (Optional) Configuration options for the charm
-# This config section defines charm config options, and populates the Configure
-# tab on Charmhub.
-# More information on this section at:
-# https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/#config
-# General configuration documentation:
-# https://documentation.ubuntu.com/juju/3.6/reference/configuration/#application-configuration
+# `cos_agent` is not published to PyPI, so it is the one library we still fetch from
+# Charmhub. Everything else comes from the `charmlibs-*` namespace on PyPI.
+charm-libs:
+  - lib: grafana_agent.cos_agent
+    version: "0"
+
 config:
   options:
-    # An example config option to customise the log level of the workload
-    log-level:
-      description: |
-        Configures the log level of gunicorn.
-
-        Acceptable values are: "info", "debug", "warning", "error" and "critical"
-      default: "info"
+    # --- Installation ---------------------------------------------------------
+    install-source:
       type: string
+      default: archive
+      description: |
+        Where to install Mosquitto from.
+
+        - `archive`: the Ubuntu archive. On 24.04 this is Mosquitto 2.0.18, which
+          lives in `universe` and therefore has no standard Ubuntu security support.
+          Patched builds are available through Ubuntu Pro (ESM Apps).
+        - `ppa`: ppa:mosquitto-dev/mosquitto-ppa, which carries current 2.1.x
+          releases built by upstream.
+        - `snap`: the strictly confined `mosquitto` snap. Note that all broker state
+          lives under /var/snap/mosquitto/common/ rather than the usual paths, and
+          that the charm holds the snap to stop snapd refreshing the broker out from
+          under you.
+
+        Changing this after installation migrates the broker's state to the new
+        layout, and will restart the broker.
+    package-channel:
+      type: string
+      default: latest/stable
+      description: |
+        The snap channel to install from. Only used when `install-source` is `snap`.
+
+    # --- Listeners ------------------------------------------------------------
+    port:
+      type: int
+      default: 1883
+      description: |
+        The port for unencrypted MQTT. Set to 0 to disable the plaintext listener,
+        which is the right thing to do once TLS is in place.
+    tls-port:
+      type: int
+      default: 8883
+      description: |
+        The port for MQTT over TLS. Set to 0 to disable. The listener is only opened
+        once the `certificates` integration has provided a certificate.
+    websockets-port:
+      type: int
+      default: 0
+      description: |
+        The port for MQTT over unencrypted WebSockets. Set to 0 to disable.
+    tls-websockets-port:
+      type: int
+      default: 0
+      description: |
+        The port for MQTT over WebSockets with TLS. Set to 0 to disable. The listener
+        is only opened once the `certificates` integration has provided a certificate.
+
+    # --- Security -------------------------------------------------------------
+    allow-anonymous:
+      type: boolean
+      default: false
+      description: |
+        Whether clients may connect without credentials.
+
+        Leave this false. When it is true the charm still runs, but says so in its
+        status, because an anonymous broker reachable off the host is an open relay.
+    tls-version:
+      type: string
+      default: tlsv1.2
+      description: |
+        The minimum TLS version accepted on the TLS listeners. One of `tlsv1.3`,
+        `tlsv1.2`.
+    require-client-certificate:
+      type: boolean
+      default: false
+      description: |
+        Whether TLS clients must present a certificate signed by the same authority
+        as the broker's own (mutual TLS).
+    use-identity-as-username:
+      type: boolean
+      default: false
+      description: |
+        Whether to take the MQTT username from the client certificate's common name
+        instead of from the CONNECT packet. Only meaningful with
+        `require-client-certificate`.
+    certificate-common-name:
+      type: string
+      default: ""
+      description: |
+        The common name to request in the broker's certificate. Defaults to the
+        unit's fully qualified domain name.
+    certificate-extra-sans-dns:
+      type: string
+      default: ""
+      description: |
+        Comma-separated additional DNS subject alternative names to request, on top
+        of the unit's own hostname and addresses. Set this to the name clients
+        actually connect to, if that differs from the unit's hostname.
+    certificate-organization:
+      type: string
+      default: ""
+      description: |
+        The organization name to request in the broker's certificate.
+
+    # --- Persistence ----------------------------------------------------------
+    persistence:
+      type: boolean
+      default: true
+      description: |
+        Whether to persist sessions, queued messages and retained messages to disk,
+        so that they survive a broker restart.
+    autosave-interval:
+      type: int
+      default: 300
+      description: |
+        Seconds between writes of the persistence database. Mosquitto's own default
+        is 1800, which risks half an hour of messages on an unclean stop.
+    persistent-client-expiration:
+      type: string
+      default: 14d
+      description: |
+        How long a disconnected persistent session is kept before it is discarded,
+        as a number followed by `h`, `d`, `w` or `m`. Empty means never expire, which
+        is Mosquitto's default and the usual cause of unbounded memory growth.
+
+    # --- Limits ---------------------------------------------------------------
+    max-connections:
+      type: int
+      default: 1024
+      description: |
+        The maximum number of concurrent client connections, or -1 for unlimited.
+        The charm raises the service's file descriptor limit to match; see
+        `open-file-limit`.
+    max-inflight-messages:
+      type: int
+      default: 20
+      description: |
+        The number of QoS 1 and 2 messages that may be in flight to a single client
+        at once. 0 means unlimited.
+    max-queued-messages:
+      type: int
+      default: 1000
+      description: |
+        The number of outgoing QoS 1 and 2 messages queued per client while it is
+        disconnected or over its inflight limit. Messages beyond this are dropped.
+    max-queued-bytes:
+      type: int
+      default: 0
+      description: |
+        A byte ceiling on the per-client queue, applied alongside
+        `max-queued-messages`. 0 disables the byte limit.
+    max-packet-size:
+      type: int
+      default: 2000000
+      description: |
+        The largest MQTT packet the broker will accept, in bytes. 0 means unlimited.
+        The charm always writes this out explicitly, so that moving between Mosquitto
+        2.0 and 2.1 does not silently change the limit.
+    max-keepalive:
+      type: int
+      default: 65535
+      description: |
+        The largest keepalive interval, in seconds, that a client may request.
+    memory-limit:
+      type: int
+      default: 0
+      description: |
+        A ceiling on the broker's heap, in bytes. 0 means no limit.
+    retain-available:
+      type: boolean
+      default: true
+      description: |
+        Whether clients may set the retain flag on published messages.
+    queue-qos0-messages:
+      type: boolean
+      default: false
+      description: |
+        Whether QoS 0 messages are queued for disconnected clients. Off by default,
+        matching MQTT's own expectations for QoS 0.
+
+    # --- Logging and monitoring -----------------------------------------------
+    log-level:
+      type: string
+      default: notice
+      description: |
+        How much the broker logs. One of `error`, `warning`, `notice`, `information`,
+        `debug`. Each level includes the ones above it.
+    connection-messages:
+      type: boolean
+      default: true
+      description: |
+        Whether to log each client connection and disconnection. Useful, but noisy on
+        a broker with many short-lived clients.
+    sys-interval:
+      type: int
+      default: 10
+      description: |
+        Seconds between updates of the `$SYS` statistics tree. 0 disables `$SYS`,
+        which also disables the metrics exporter.
+    metrics-port:
+      type: int
+      default: 9234
+      description: |
+        The port the charm's Prometheus exporter listens on. It binds to the unit's
+        private address, and is only started when the `cos-agent` integration exists.
+
+    # --- Tuning ---------------------------------------------------------------
+    open-file-limit:
+      type: int
+      default: 0
+      description: |
+        The file descriptor limit for the broker service. 0 means the charm computes
+        it from `max-connections`.
+
+        The packaged systemd unit sets no limit at all, so the broker inherits 1024
+        and refuses new connections at around a thousand clients. The charm always
+        sets this, via a systemd drop-in, because limits.conf does not apply to
+        services.
+    sysctl-tuning:
+      type: boolean
+      default: true
+      description: |
+        Whether to tune kernel networking parameters for a broker with many
+        connections: somaxconn, tcp_max_syn_backlog, netdev_max_backlog and
+        ip_local_port_range.
+
+        Where the kernel namespace does not permit the write, which is common in
+        containers, the charm logs a warning and carries on. Set this to false on a
+        host shared with other workloads.
+
+    # --- Escape hatches -------------------------------------------------------
+    extra-config:
+      type: string
+      default: ""
+      description: |
+        Additional mosquitto.conf directives, one per line, for anything the charm
+        does not expose.
+
+        Directives that would subvert what the charm manages are rejected, and the
+        unit goes to blocked rather than applying a config the charm cannot reason
+        about: listener, port, bind_address, allow_anonymous, password_file,
+        acl_file, plugin, per_listener_settings and user.
+    bridge-topics:
+      type: string
+      default: ""
+      description: |
+        Topic directives for the bridge to the broker on the `upstream` integration,
+        one per line, in Mosquitto's own syntax:
+
+            topic <pattern> [in|out|both] [local_prefix] [remote_prefix]
+
+        Ignored when `upstream` is not integrated. Defaults to forwarding nothing, so
+        set this or the bridge carries no traffic.
+
+actions:
+  set-password:
+    description: |
+      Create an MQTT user, or change an existing user's password.
+
+      With no password, one is generated and returned as a Juju secret; the password
+      itself is never placed in the action results, where it would be visible to
+      anyone who can read the operation log.
+    params:
+      username:
+        type: string
+        description: The MQTT username.
+      password:
+        type: string
+        description: The password to set. Omit to have one generated.
+    required: [username]
+    additionalProperties: false
+  remove-user:
+    description: Remove an MQTT user and all of its topic permissions.
+    params:
+      username:
+        type: string
+        description: The MQTT username.
+    required: [username]
+    additionalProperties: false
+  list-users:
+    description: |
+      List the MQTT users the charm manages, and their topic permissions. Passwords
+      are never returned.
+    additionalProperties: false
+  grant:
+    description: Grant a user access to a topic filter.
+    params:
+      username:
+        type: string
+        description: The MQTT username.
+      topic:
+        type: string
+        description: |
+          The topic filter, in MQTT syntax, so `+` matches one level and `#` matches
+          the rest. Note that `#` does not match the `$SYS` tree.
+      access:
+        type: string
+        description: One of `read`, `write`, `readwrite` or `deny`.
+        default: readwrite
+    required: [username, topic]
+    additionalProperties: false
+  revoke:
+    description: Remove a topic permission from a user.
+    params:
+      username:
+        type: string
+        description: The MQTT username.
+      topic:
+        type: string
+        description: The topic filter to stop granting.
+    required: [username, topic]
+    additionalProperties: false
+  health-check:
+    description: |
+      Check that the broker is actually serving MQTT, by connecting, subscribing and
+      publishing a message to a private topic and reading it back. This is a real
+      check: a broker can accept TCP connections while being unable to serve any of
+      them.
+    params:
+      listener:
+        type: string
+        description: Which listener to check — `plain`, `tls` or `all`.
+        default: all
+    additionalProperties: false
+  broker-stats:
+    description: A snapshot of the broker's `$SYS` statistics tree.
+    additionalProperties: false
+  create-backup:
+    description: |
+      Back up the persistence database, password file, ACL file and rendered
+      configuration to a tarball on the unit.
+    params:
+      path:
+        type: string
+        description: |
+          Where to write the tarball. Defaults to a timestamped file under
+          /var/lib/mosquitto/backups/.
+    additionalProperties: false
+  restore-backup:
+    description: |
+      Restore from a tarball made by `create-backup`. The broker is stopped for the
+      duration, so every client is disconnected.
+    params:
+      path:
+        type: string
+        description: The tarball to restore from.
+    required: [path]
+    additionalProperties: false
+  force-reconfigure:
+    description: |
+      Re-render the configuration and reconcile the broker unconditionally, whether
+      or not the charm believes anything has changed. Use this after editing files on
+      the unit by hand.
+    additionalProperties: false
+  pause:
+    description: |
+      Stop the broker without removing the unit, for host maintenance. The unit goes
+      to maintenance status and stays there until `resume`.
+    additionalProperties: false
+  resume:
+    description: Start the broker again after `pause`.
+    additionalProperties: false
+
+provides:
+  mqtt:
+    interface: mqtt
+    description: |
+      Offer MQTT credentials and topic permissions to related applications. Each
+      related application gets its own user, its own password in a Juju secret, and
+      only the topic permissions it asked for.
+  cos-agent:
+    interface: cos_agent
+    description: |
+      Send metrics, logs, dashboards and alert rules to the Canonical Observability
+      Stack, through a grafana-agent or opentelemetry-collector subordinate.
+
+requires:
+  certificates:
+    interface: tls-certificates
+    limit: 1
+    optional: true
+    description: |
+      Obtain a server certificate from a certificate authority charm, such as
+      self-signed-certificates or vault, to serve the TLS listeners.
+  upstream:
+    interface: mqtt
+    limit: 1
+    optional: true
+    description: |
+      Bridge this broker to another Mosquitto application, forwarding the topics named
+      in `bridge-topics`. This is how hub-and-spoke and edge-to-central topologies are
+      built, since Mosquitto does not cluster.
+  charm-tracing:
+    interface: tracing
+    limit: 1
+    optional: true
+    description: Send charm execution traces to a Tempo-backed tracing provider.
+  receive-ca-cert:
+    interface: certificate_transfer
+    limit: 1
+    optional: true
+    description: |
+      Receive the certificate authority certificate needed to talk to the tracing
+      endpoint over TLS.
+
+peers:
+  mosquitto-peers:
+    interface: mosquitto-peers
+
+storage:
+  data:
+    type: filesystem
+    location: /var/lib/mosquitto
+    minimum-size: 1G
+    description: |
+      The broker's persistence database, password file, ACL file and backups.

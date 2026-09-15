@@ -1,0 +1,144 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+name: Bug report
+description: Report something the Mosquitto charm does wrong
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+
+        **Please do not report security vulnerabilities here.** See
+        [SECURITY.md](https://github.com/tonyandrewmeyer/mosquitto-operator/blob/main/SECURITY.md)
+        and report privately instead.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear description of the problem, and what you expected instead.
+      placeholder: |
+        After integrating mosquitto with my-client, the broker unit went to
+        blocked with "waiting for TLS certificate", and stayed there. I
+        expected it to become active once the certificate was issued.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact `juju` commands you ran, in order.
+      value: |
+        1. `juju add-model test`
+        2. `juju deploy mosquitto --channel latest/edge`
+        3.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: charm-revision
+    attributes:
+      label: Charm revision
+      description: "From `juju status --format=yaml`, or the revision you deployed. Use `git rev-parse HEAD` if you built it yourself."
+      placeholder: "42"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Charmhub channel
+      options:
+        - latest/stable
+        - latest/candidate
+        - latest/beta
+        - latest/edge
+        - Built locally from source
+        - Other (say which below)
+    validations:
+      required: true
+
+  - type: input
+    id: juju-version
+    attributes:
+      label: Juju version
+      description: Output of `juju version`.
+      placeholder: "3.6.10-ubuntu-amd64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: base
+    attributes:
+      label: Base
+      description: The base the charm is running on.
+      options:
+        - ubuntu@24.04
+        - Other (say which below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cloud
+    attributes:
+      label: Cloud
+      description: The substrate you are running on.
+      options:
+        - LXD
+        - MAAS
+        - AWS
+        - Azure
+        - Google Cloud
+        - OpenStack
+        - VMware vSphere
+        - Multipass
+        - Other (say which below)
+    validations:
+      required: true
+
+  - type: input
+    id: architecture
+    attributes:
+      label: Architecture
+      placeholder: "amd64"
+
+  - type: textarea
+    id: status
+    attributes:
+      label: juju status
+      description: Output of `juju status --relations`. Redact anything sensitive.
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Relevant output from `juju debug-log --replay --include mosquitto`, and
+        any tracebacks. A [crashdump](https://github.com/juju/juju-crashdump)
+        is even better — please attach it rather than pasting it.
+        **Check for credentials, certificates and private keys before pasting.**
+      render: text
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Charm configuration
+      description: Non-default options, from `juju config mosquitto`.
+      render: yaml
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I have removed credentials, certificates and other secrets from the output above.
+          required: true
+        - label: I have reproduced this on the latest revision in the channel I am tracking, or explained why I cannot.
+          required: false

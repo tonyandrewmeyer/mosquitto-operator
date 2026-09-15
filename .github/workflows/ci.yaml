@@ -1,0 +1,186 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+#
+# Lint, unit tests, charm pack, and Juju integration tests on an LXD machine
+# cloud. Every action is pinned to a full commit SHA with the tag it resolved
+# to in the trailing comment; Dependabot keeps both in step.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: grant nothing by default, and opt in per job.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and static type check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read        # read the repository under test; nothing else
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      # The cheapest possible check: catches "edited pyproject.toml, forgot to
+      # relock", which would otherwise only surface at `charmcraft pack`.
+      - name: Check that uv.lock is in sync with pyproject.toml
+        run: uv lock --check
+
+      - name: Set up tox and tox-uv
+        run: uv tool install tox --with tox-uv
+
+      - name: Lint
+        run: tox -e lint
+
+      - name: Static type check
+        run: tox -e static
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read        # read the repository under test; nothing else
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Set up tox and tox-uv
+        run: uv tool install tox --with tox-uv
+
+      - name: Run unit tests
+        run: tox -e unit
+
+      - name: Upload the coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  build:
+    name: Pack the charm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read        # read the repository under test; nothing else
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # concierge's `crafts` preset installs charmcraft and sets up the LXD
+      # build backend, which is all a pack needs -- no Juju controller.
+      - name: Install concierge
+        run: sudo snap install --classic concierge
+
+      - name: Provision charmcraft and LXD
+        run: sudo concierge prepare --verbose -p crafts
+
+      - name: Pack
+        run: charmcraft pack --verbose
+
+      - name: Analyse the packed charm
+        run: charmcraft analyse ./*.charm
+
+      - name: Upload the packed charm
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: charm
+          path: "*.charm"
+          if-no-files-found: error
+          retention-days: 7
+
+  integration:
+    name: Integration (Juju ${{ matrix.juju-channel }})
+    runs-on: ubuntu-latest
+    needs: [build]
+    timeout-minutes: 90
+    permissions:
+      contents: read        # read the repository under test; nothing else
+
+    strategy:
+      fail-fast: false
+      matrix:
+        juju-channel: ["3.6/stable", "4.0/stable"]
+
+    # Two LXD bootstraps racing on one runner is never what you want, so the
+    # matrix value is part of the concurrency key.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-integration-${{ matrix.juju-channel }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the packed charm
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: charm
+
+      - name: Install concierge
+        run: sudo snap install --classic concierge
+
+      # `-p machine` installs LXD, runs `lxd init` and bootstraps a Juju
+      # controller onto the LXD cloud: the whole machine substrate in one go.
+      # The matrix value is hoisted into env rather than interpolated into the
+      # script, so the shell never sees expression-substituted text.
+      - name: Provision Juju and LXD
+        env:
+          JUJU_CHANNEL: ${{ matrix.juju-channel }}
+        run: |
+          sudo concierge prepare --verbose \
+            --juju-channel="$JUJU_CHANNEL" \
+            -p machine
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Set up tox and tox-uv
+        run: uv tool install tox --with tox-uv
+
+      # The integration tests deploy the .charm built by the `build` job rather
+      # than packing again, so the artefact under test is the one CI produced.
+      - name: Run integration tests
+        run: |
+          CHARM_PATH="$(ls ./*.charm | head -n1)"
+          export CHARM_PATH
+          tox -e integration -- --juju-dump-logs logs
+
+      - name: Upload the Juju debug logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # The channel name contains a '/', which artifact names cannot.
+          name: juju-logs-${{ strategy.job-index }}
+          path: logs
+          if-no-files-found: ignore
+          retention-days: 7

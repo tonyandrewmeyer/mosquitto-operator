@@ -1,15 +1,88 @@
-venv/
-build/
+# Charm build artefacts
 *.charm
-.tox/
-.coverage
+build/
+dist/
+/parts/
+/prime/
+/stage/
+.charmcraft_output_packages.txt
+charmcraft.log
+/requirements.txt
+/requirements-last-build.txt
+
+# NOTE: lib/ is deliberately NOT ignored. Charm libraries fetched with
+# `charmcraft fetch-libs` are committed, so that builds and CI are reproducible
+# without reaching Charmhub. Prefer PyPI `charmlibs-*` packages where one
+# exists -- those are locked in uv.lock and need no lib/ directory at all.
+
+# Python
 __pycache__/
 *.py[cod]
-.idea
-.vscode/
-.claude/settings.local.json
-.ruff_cache/
-.pytest_cache/
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Virtual environments (uv creates .venv; tox devenv creates venv/)
 .venv/
-htmlcov/
+venv/
+ENV/
+env/
+
+# uv. NB: uv.lock IS committed -- it is the lock file everything installs from.
+.uv-cache/
+
+# tox and nox
+.tox/
+.nox/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+.coverage.*
 coverage.xml
+htmlcov/
+.benchmarks/
+junit*.xml
+
+# Linters and type checkers
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.pyright/
+
+# Juju and deployment
+juju-crashdump*.tar.xz
+/lxd-profile.yaml
+*.log
+
+# Terraform, if a Terraform module for the charm is ever added here
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+
+# Documentation builds
+docs/_build/
+docs/.sphinx/.doctrees/
+docs/.sphinx/warnings.txt
+
+# Editors and IDEs
+.idea/
+.vscode/
+!.vscode/extensions.json
+*.swp
+*~
+.DS_Store
+
+# Local agent and tool overrides (shared configuration stays in git)
+.claude/settings.local.json
+.envrc
+.env
+.secrets

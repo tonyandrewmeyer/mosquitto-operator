@@ -1,0 +1,76 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+name: Feature request
+description: Suggest a capability or improvement for the Mosquitto charm
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. The most useful feature requests start with
+        the problem rather than the solution — it is often the case that the
+        charm can already solve it, or can solve it more neatly a different way.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe your use case and what is getting in the way.
+      placeholder: |
+        I run Mosquitto in front of a fleet of sensors and need per-device
+        ACLs, but the charm only exposes a single username and password, so
+        every device shares credentials.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like the charm to do?
+      description: |
+        If you have a concrete proposal, sketch it — new config options,
+        actions, or relation endpoints, and roughly what they would look like.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried or considered?
+      description: Workarounds you are using now, or alternatives you have ruled out and why.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the charm does this touch?
+      multiple: true
+      options:
+        - Configuration options
+        - Actions
+        - Relations and integrations
+        - TLS and certificates
+        - Authentication and ACLs
+        - Bridging and clustering
+        - Observability (metrics, logs, dashboards, alerts)
+        - Backup and restore
+        - Upgrades
+        - Documentation
+        - Testing
+        - Not sure
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to work on this myself, with some guidance.
+          required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched the existing issues and this is not a duplicate.
+          required: true

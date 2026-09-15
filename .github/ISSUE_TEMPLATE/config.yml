@@ -1,0 +1,19 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/tonyandrewmeyer/mosquitto-operator/security/advisories/new
+    about: Report security issues privately — please do not open a public issue.
+  - name: Charmhub Matrix community
+    url: https://matrix.to/#/#charmhub:ubuntu.com
+    about: Chat with the wider charming community about Juju and charm development.
+  - name: Charmhub Discourse
+    url: https://discourse.charmhub.io/
+    about: Longer-form discussion about charms, Juju and the ecosystem.
+  - name: Mosquitto broker bugs
+    url: https://github.com/eclipse-mosquitto/mosquitto/issues
+    about: For bugs in the Mosquitto broker itself, rather than in this charm.
+  - name: Juju bugs
+    url: https://github.com/juju/juju/issues
+    about: For bugs in Juju itself, rather than in this charm.

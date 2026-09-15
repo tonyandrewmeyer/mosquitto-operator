@@ -4,79 +4,213 @@
 [project]
 name = "mosquitto"
 version = "0.0.1"
-requires-python = ">=3.10"
+description = "A Juju machine charm for the Eclipse Mosquitto MQTT broker."
+requires-python = ">=3.12"          # ubuntu@24.04, our only base, ships Python 3.12
 
-# Dependencies of the charm code
-# You should list the dependencies of the code in src/, including any charm libraries from PyPI.
-# We recommend using uv to maintain this list. For example, 'uv add charmlibs-pathops'.
-# If your code uses any libraries from Charmhub, don't list those libraries here. Instead, add a
-# 'charm-libs' block in charmcraft.yaml, run `charmcraft fetch-libs` to download the libraries,
-# then inspect the libraries for dependencies specified in PYDEPS. List those dependencies here.
+# Runtime dependencies of the charm code in src/. These, and only these, are
+# installed into the venv inside the .charm by the charmcraft uv plugin.
+#
+# Charm libraries fetched from Charmhub with `charmcraft fetch-libs` land in
+# lib/ and are copied verbatim, but their PYDEPS are not: anything a fetched
+# library declares must be listed here too. `cosl` is here for that reason --
+# the cos_agent library declares it.
 dependencies = [
-    "ops~=3.7",
+    "ops[tracing]~=3.8",
+    "pydantic~=2.0",
+    "cosl~=1.10",
+    "charmlibs-apt~=1.0",
+    # NB: charmlibs-snap 2.x is a rewrite of the 1.x API, not a compatible bump.
+    "charmlibs-snap~=2.0",
+    "charmlibs-systemd~=1.0",
+    "charmlibs-sysctl~=1.0",
+    "charmlibs-pathops~=1.3",
+    "charmlibs-interfaces-tls-certificates~=1.10",
 ]
 
 [dependency-groups]
-# Dependencies of linting and static type checks
+# There is deliberately NO `dev` group. The charmcraft uv plugin runs `uv sync`
+# at pack time, and `uv sync` installs the `dev` group by default -- a `dev`
+# group would ship every linter and test tool inside the .charm.
 lint = [
-    "ruff",
-    "codespell",
-    "pyright",
+    "codespell~=2.4",
+    "ruff~=0.16",
+    # The `nodejs` extra pulls prebuilt Node from nodejs-wheel-binaries rather
+    # than downloading a toolchain at runtime via nodeenv. The npm pyright
+    # version is pinned separately with PYRIGHT_PYTHON_FORCE_VERSION in tox.ini.
+    "pyright[nodejs]~=1.1",
 ]
-# Dependencies of unit tests
 unit = [
-    "coverage[toml]",
-    "ops[testing]",
-    "pytest",
+    "coverage[toml]~=7.16",
+    "ops[testing]~=3.8",
+    "pytest~=9.1",
 ]
-# Dependencies of integration tests
+functional = [
+    "pytest~=9.1",
+]
 integration = [
-    "jubilant>=1.8,<2",
-    "pytest",
-    "pytest-jubilant>=2.0.1,<3",
+    "jubilant>=1.13,<2",
+    "pytest~=9.1",
+    "pytest-jubilant>=2.3,<3",
 ]
 
+[tool.uv]
+# Belt and braces alongside the absent `dev` group above: never sync a group
+# implicitly, because `charmcraft pack` runs `uv sync` in the build environment.
+default-groups = []
+
 # Testing tools configuration
+
 [tool.coverage.run]
 branch = true
+# Charm libraries fetched from Charmhub are third-party code we do not test.
+omit = ["lib/*", "tests/*"]
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 80
 
 [tool.pytest.ini_options]
-minversion = "6.0"
+minversion = "9.0"
 log_cli = true
 log_cli_level = "INFO"
 log_cli_format = "%(levelname)s %(name)s %(message)s"
 filterwarnings = ["error"]
 
 # Linting tools configuration
+
 [tool.ruff]
 line-length = 99
-lint.select = ["E", "W", "F", "C", "N", "D", "I001"]
-lint.ignore = [
-    "D105",
-    "D107",
-    "D203",
-    "D204",
-    "D213",
-    "D215",
-    "D400",
-    "D404",
-    "D406",
-    "D407",
-    "D408",
-    "D409",
-    "D413",
+target-version = "py312"            # keep in step with requires-python
+# Charm libs fetched with `charmcraft fetch-libs` are third-party code: never lint them.
+extend-exclude = ["lib", "__pycache__", "*.egg_info"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = [
+    "F",    # Pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I001", # isort: unsorted-imports
+    "N",    # pep8-naming
+    "A",    # flake8-builtins
+    "CPY",  # flake8-copyright
+    "UP",   # pyupgrade
+    "YTT",  # flake8-2020
+    "S",    # flake8-bandit
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+    "PERF", # perflint
+    "D",    # pydocstyle
+    "FA",   # flake8-future-annotations
+    "TC",   # flake8-type-checking
+    # Beyond the charm-tech agreed set:
+    "C4",   # flake8-comprehensions
+    "PT",   # flake8-pytest-style
+    "ICN",  # flake8-import-conventions ("import modules, not objects")
+    "TID",  # flake8-tidy-imports
+    "LOG",  # flake8-logging
+    "G",    # flake8-logging-format
 ]
-lint.per-file-ignores = {"tests/*" = ["D100","D101","D102","D103","D104"]}
-extend-exclude = ["__pycache__", "*.egg_info"]
+ignore = [
+    # Don't force imports into `if TYPE_CHECKING` blocks.
+    "TC001", "TC002", "TC003",
+    # `assert` is fine.
+    "S101",
+    # No docstrings required for magic methods or __init__.
+    "D105", "D107",
+    # Conflict with the D211/D212 that ruff's google convention selects.
+    "D203", "D213",
+    # We prefer returning the condition explicitly, and an explicit try/except.
+    "SIM103", "SIM105", "SIM117",
+    # A machine charm builds its own subprocess argument lists, from absolute
+    # paths and without a shell.
+    "S603",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "D",                      # no docstrings required in tests
+    "S105", "S106", "S107",   # hard-coded "passwords" in fixtures
+    "B018",                   # a bare expression is sometimes the assertion
+    "CPY",                    # no copyright header on every test file
+]
+"tests/integration/*" = [
+    "S607",                   # these shell out to juju and charmcraft by name
+]
+"tests/functional/*" = [
+    "S607",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-copyright]
+author = "Tony Meyer"
+notice-rgx = "Copyright\\s\\d{4}([-,]\\d{4})*\\s+"
+
+[tool.ruff.lint.flake8-builtins]
+builtins-ignorelist = ["id", "type", "format", "input", "min", "map", "range"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# The charm-tech style guide wants `from . import x` inside a package, so ban
+# only parent-relative imports. This is also ruff's own default.
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.flake8-import-conventions]
+# House rule: import modules, not objects. `typing`, `typing_extensions` and
+# `__future__` are deliberately absent -- they are the exceptions.
+#
+# ICN003 matches the dotted module name exactly: there is no wildcard, and
+# submodules (for example `os.path`) have to be listed separately. See
+# https://github.com/astral-sh/ruff/issues/10664 for the open request for a
+# wildcard. This list is therefore curated, and is a floor rather than a
+# complete enforcement of the rule -- code review covers the rest.
+banned-from = [
+    # Charming
+    "ops", "ops.testing", "ops.pebble", "ops.charm", "ops.model", "ops.framework",
+    "ops_tracing", "jubilant", "cosl",
+    "charmlibs", "charmlibs.apt", "charmlibs.snap", "charmlibs.systemd",
+    "charmlibs.sysctl", "charmlibs.pathops", "charmlibs.interfaces",
+    # Standard library
+    "collections", "collections.abc", "contextlib", "dataclasses", "datetime",
+    "enum", "functools", "grp", "hashlib", "ipaddress", "itertools", "json",
+    "logging", "os", "os.path", "pathlib", "pwd", "re", "secrets", "shutil",
+    "socket", "ssl", "string", "subprocess", "sys", "tempfile", "textwrap",
+    "time", "urllib", "urllib.parse",
+    # Third party
+    "pydantic", "pytest", "requests", "yaml",
+]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
 [tool.codespell]
-skip = "build,lib,venv,icon.svg,.tox,.git,.mypy_cache,.ruff_cache,.coverage"
+skip = "./lib,./docs/research,./icon.svg,./uv.lock,./build,./.tox,./.git,./.venv,./.ruff_cache,./.pytest_cache,./htmlcov"
 
 [tool.pyright]
 include = ["src", "tests"]
+# lib/ holds charm libraries fetched from Charmhub. They are third-party,
+# frequently untyped, and not ours to fix: resolve imports from them, but do
+# not check them.
+exclude = ["lib", "**/__pycache__", ".tox", ".venv", "build", "dist"]
+extraPaths = ["lib"]
+pythonVersion = "3.12"              # keep in step with requires-python
+pythonPlatform = "Linux"
+typeCheckingMode = "strict"
+# Charm-tech style guide: things that are effectively public to us still need
+# to be private to charm users.
+reportPrivateUsage = false
+# Catch stale `# type: ignore` comments.
+reportUnnecessaryTypeIgnoreComment = "error"
+# Charm libs ship no stubs and often no inline types; without these, every
+# `import charms.foo.v0.bar` is an error under strict.
+reportMissingTypeStubs = false
+reportMissingModuleSource = false
+# Charm libs are untyped, so anything crossing that boundary is Unknown. Drop
+# these three if lib/ ever goes away in favour of PyPI charmlibs-* packages.
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false

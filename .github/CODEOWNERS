@@ -1,0 +1,11 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+
+# Every change is reviewed by the repository owner.
+* @tonyandrewmeyer
+
+# Belt and braces on CI, packaging and security policy.
+/.github/           @tonyandrewmeyer
+/charmcraft.yaml    @tonyandrewmeyer
+/pyproject.toml     @tonyandrewmeyer
+/SECURITY.md        @tonyandrewmeyer

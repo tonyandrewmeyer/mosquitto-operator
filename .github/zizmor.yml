@@ -1,0 +1,13 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+#
+# zizmor configuration.
+# Docs: https://docs.zizmor.sh/configuration/
+# Schema: https://raw.githubusercontent.com/woodruffw/zizmor/main/support/zizmor.schema.json
+#
+# Keep this file minimal. `disable:` is a last resort, because a disabled rule
+# does not appear in the suppressed-findings count and so new findings under it
+# are silently missed. Prefer an inline `# zizmor: ignore[rule] <reason>`
+# comment for a one-off, and a targeted `ignore:` entry here only when the
+# finding is structural rather than incidental.
+rules: {}

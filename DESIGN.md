@@ -61,7 +61,7 @@ Consequent choices:
 | Concern | Choice |
 | --- | --- |
 | Packaging | `apt`, from the archive by default; `ppa` and `snap` available |
-| Charm libs | PyPI `charmlibs-*` throughout; no `charmcraft fetch-libs`, no vendored `lib/` |
+| Charm libs | PyPI `charmlibs-*` throughout, except `cos_agent`, which is not on PyPI and is the one library still fetched into `lib/` |
 | TLS | `charmlibs-interfaces-tls-certificates` (not the v4 Charmhub lib), `Mode.UNIT` |
 | Observability | `COSAgentProvider` (`cos-agent`), works with grafana-agent and otelcol |
 | Tracing | `ops[tracing]`, `ops.tracing.Tracing(self, "charm-tracing", ca_relation_name="receive-ca-cert")` |

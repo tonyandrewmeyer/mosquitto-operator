@@ -1,0 +1,98 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+#
+# Routine version-update sweeps only. CVE patches are raised by the repository
+# "Dependabot security updates" toggle (Settings > Advanced Security), which is
+# event-driven and does not honour the schedules below. Turn that on too.
+#
+# Docs: https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+version: 2
+
+updates:
+  # Python, via uv. Updates pyproject.toml -- including the PEP 735
+  # [dependency-groups] sections, supported since February 2026 -- and uv.lock.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Pacific/Auckland"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "build"
+      prefix-development: "build"
+    # Don't ingest a compromised release on the day it lands.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      # NB: `dependency-type: development|production` is accepted by the config
+      # validator but is a no-op for the uv ecosystem
+      # (dependabot-core#13202), so everything here groups by `patterns`.
+      charm-tech:
+        patterns:
+          - "ops"
+          - "ops-scenario"
+          - "ops-tracing"
+          - "charmlibs-*"
+          - "cosl"
+          - "jubilant"
+          - "pytest-jubilant"
+      dev-tooling:
+        patterns:
+          - "ruff"
+          - "pyright"
+          - "codespell"
+          - "coverage"
+          - "nodejs-wheel-binaries"
+      test-deps:
+        patterns:
+          - "pytest"
+          - "pytest-*"
+        exclude-patterns:
+          - "pytest-jubilant"
+      # Everything else, minor and patch only, so that a runtime major version
+      # always gets its own reviewable pull request.
+      runtime:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions. Dependabot bumps the pinned SHA and the trailing `# vX.Y.Z`
+  # comment together. It will not convert a tag pin into a SHA pin, so new
+  # actions must be added SHA-pinned by hand.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Pacific/Auckland"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "ci"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      github-official-actions:
+        patterns:
+          - "actions/*"
+          - "github/*"
+      canonical-actions:
+        patterns:
+          - "canonical/*"
+      all-other-actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "actions/*"
+          - "github/*"
+          - "canonical/*"

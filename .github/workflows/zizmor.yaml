@@ -1,0 +1,56 @@
+# Copyright 2026 Tony Meyer
+# See LICENSE file for licensing details.
+#
+# Static analysis of this repository's own GitHub Actions workflows and
+# Dependabot configuration. Results land in Security > Code scanning.
+# Docs: https://docs.zizmor.sh/integrations/
+name: zizmor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  ZIZMOR_VERSION: 1.30.1
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: Audit the workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      security-events: write   # upload the SARIF results to code scanning
+      contents: read           # read the workflows under audit
+      actions: read            # required for the SARIF upload on private repos
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      # GH_TOKEN switches zizmor into online mode, which enables the audits
+      # that need the API: impostor-commit, known-vulnerable-actions,
+      # archived-uses, stale-action-refs and ref-version-mismatch.
+      - name: Run zizmor
+        run: uvx "zizmor@${ZIZMOR_VERSION}" --format=sarif . > results.sarif
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the SARIF file
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          sarif_file: results.sarif
+          category: zizmor

@@ -200,10 +200,14 @@ In priority order.
    escape hatch above.
 2. **File permissions are enforced by the broker.** The binary contains
    `Warning: File %s has world readable permissions. Future versions will refuse to
-   load this file.`, plus owner and group variants. Use `0640 root:mosquitto` for the
-   password file, ACL file, TLS keys and any `conf.d` fragment containing a bridge
-   password; `0700 mosquitto:mosquitto` for `/var/lib/mosquitto`. Re-assert these on
-   every reconfiguration, not only at install.
+   load this file.`, plus owner and group variants.
+
+   Verified against 2.0.18 on 24.04: with a `0640 root:mosquitto` password file the
+   broker still warns `File ... owner is not mosquitto`. So the target is **`0600`
+   owned by `mosquitto:mosquitto`** for the password file, ACL file and TLS keys —
+   not `root:mosquitto`. `conf.d` fragments that carry a bridge password get `0640`
+   `mosquitto:mosquitto`, and `/var/lib/mosquitto` gets `0700 mosquitto:mosquitto`.
+   Re-assert these on every reconfiguration, not only at install.
 3. **Pin the password hash explicitly** — `-H sha512-pbkdf2` on 2.0, `-H argon2id` on
    2.1 — because an argon2id file cannot be read by 2.0. Write via a `0600` temporary
    file and `os.replace()` rather than `mosquitto_passwd -b`, which puts the password
