@@ -106,7 +106,12 @@ jobs:
         run: charmcraft pack --verbose
 
       - name: Analyse the packed charm
-        run: charmcraft analyse ./*.charm
+        # `entrypoint` is ignored because charmcraft's own linter cannot read the
+        # dispatch script charmcraft's own uv plugin generates: it compares against the
+        # literal string '${dispatch_path}' rather than expanding it, so it reports a
+        # missing entrypoint for every uv-built charm. Every other linter still runs,
+        # and `analyse` exits non-zero if any of them fails.
+        run: charmcraft analyse --ignore entrypoint ./*.charm
 
       - name: Upload the packed charm
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
