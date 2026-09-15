@@ -481,7 +481,7 @@ def test_a_broker_that_refuses_to_start_says_why(
     )
     # The reconciliation stops there rather than carrying on as if all were well.
     assert not fake.exporter.installed
-    assert any('Recent Mosquitto log' in line.message for line in ctx.juju_log)
+    assert any(line.message.startswith('mosquitto: ') for line in ctx.juju_log)
 
 
 def test_a_failed_reload_does_not_error_the_hook(
@@ -506,7 +506,7 @@ def test_a_failed_reload_does_not_error_the_hook(
         'the last change was not applied — could not reload Mosquitto: exit 1'
     )
     assert any('would not come up' in line.message for line in ctx.juju_log)
-    assert any('Recent Mosquitto log' in line.message for line in ctx.juju_log)
+    assert any(line.message.startswith('mosquitto: ') for line in ctx.juju_log)
 
 
 def test_status_warns_about_anonymous_access(
@@ -1813,3 +1813,28 @@ def test_pause_disables_the_service(
 
     assert fake.running is False
     assert fake.enabled is False
+
+
+def test_a_rejected_configuration_is_taken_back_off_disk(
+    fake: conftest.FakeMosquitto, ctx: testing.Context[charm.MosquittoCharm]
+):
+    """Leaving a rejected configuration on disk is not harmless.
+
+    The packaged logrotate fragment sends the broker a SIGHUP every night, so a broker
+    running happily on its old in-memory configuration would die at 03:00, hours after
+    the operator walked away from a blocked unit.
+    """
+    fake.version = '2.1.2'
+    fake.running = True
+    state = ctx.run(ctx.on.start(), make_state())
+    good = fake.main_config
+    assert good
+
+    fake.rejection = 'Error: Unknown configuration variable "nonsense".'
+    ctx.run(
+        ctx.on.config_changed(),
+        dataclasses.replace(state, config={'extra-config': 'nonsense 1'}),
+    )
+
+    assert fake.extra_config == '', 'the rejected fragment was left on disk'
+    assert 'restore_fragments' in fake.calls

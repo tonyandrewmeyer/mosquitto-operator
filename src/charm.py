@@ -443,6 +443,8 @@ class MosquittoCharm(ops.CharmBase):
         )
         bridge_config, bridge_change = self._bridge(settings, paths, version)
         changes.append(bridge_change)
+        # Kept so that a configuration the broker rejects can be taken back off disk.
+        previous_fragments = mosquitto.snapshot_fragments(paths)
         changes.append(
             mosquitto.write_config(
                 paths,
@@ -464,6 +466,9 @@ class MosquittoCharm(ops.CharmBase):
         if rejection is not None:
             self._service_error = f'the broker rejected the configuration — {rejection}'
             logger.error('Not applying a configuration Mosquitto rejects: %s', rejection)
+            # And take it back off disk, so that the nightly logrotate SIGHUP does not
+            # restart the broker into it at 03:00.
+            mosquitto.restore_fragments(paths, previous_fragments)
             return
 
         try:
@@ -477,9 +482,8 @@ class MosquittoCharm(ops.CharmBase):
             # that says what was actually wrong with it.
             self._service_error = str(e)
             logger.error('Mosquitto would not come up: %s', e)
-            journal = mosquitto.last_log(paths)
-            if journal:
-                logger.error('Recent Mosquitto log:\n%s', journal)
+            for line in mosquitto.last_log(paths).splitlines():
+                logger.warning('mosquitto: %s', line)
             return
 
         self._open_ports(settings, have_tls=material is not None)

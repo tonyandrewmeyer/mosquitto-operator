@@ -876,6 +876,44 @@ def check_config(file_paths: Paths, version: str | None) -> str | None:
     return '; '.join(errors) or 'the broker rejected the configuration'
 
 
+def snapshot_fragments(file_paths: Paths) -> dict[str, str | None]:
+    """Record the charm's configuration fragments, so they can be put back.
+
+    Args:
+        file_paths: Where Mosquitto's files live.
+
+    Returns:
+        Each fragment's filename mapped to its contents, or None where it is absent.
+    """
+    snapshot: dict[str, str | None] = {}
+    for name in (CHARM_CONFIG_FILENAME, BRIDGE_CONFIG_FILENAME, EXTRA_CONFIG_FILENAME):
+        path = file_paths.conf_dir / name
+        snapshot[name] = path.read_text() if path.exists() else None
+    return snapshot
+
+
+def restore_fragments(file_paths: Paths, snapshot: Mapping[str, str | None]) -> None:
+    """Put the configuration fragments back as they were.
+
+    Leaving a rejected configuration on disk is not harmless: the packaged logrotate
+    fragment sends the broker a SIGHUP every night, so a broker that is running happily
+    on its old in-memory configuration dies at 03:00, hours after the operator walked
+    away from a blocked unit. A reboot does the same.
+
+    Args:
+        file_paths: Where Mosquitto's files live.
+        snapshot: The fragments as `snapshot_fragments` recorded them.
+    """
+    for name, contents in snapshot.items():
+        path = file_paths.conf_dir / name
+        if contents is None:
+            path.unlink(missing_ok=True)
+        else:
+            pathops.ensure_contents(
+                path, contents, mode=0o640, user=file_paths.user, group=file_paths.group
+            )
+
+
 def write_config(
     file_paths: Paths,
     *,

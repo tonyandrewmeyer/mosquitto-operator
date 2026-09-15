@@ -204,6 +204,22 @@ class FakeMosquitto:
         self.users = dict(users)
         return mosquitto.Change.RELOAD if changed else mosquitto.Change.NONE
 
+    def snapshot_fragments(self, file_paths: mosquitto.Paths) -> dict[str, str | None]:
+        self.calls.append('snapshot_fragments')
+        return {
+            mosquitto.CHARM_CONFIG_FILENAME: self.main_config or None,
+            mosquitto.BRIDGE_CONFIG_FILENAME: self.bridge_config,
+            mosquitto.EXTRA_CONFIG_FILENAME: self.extra_config or None,
+        }
+
+    def restore_fragments(
+        self, file_paths: mosquitto.Paths, snapshot: collections.abc.Mapping[str, str | None]
+    ) -> None:
+        self.calls.append('restore_fragments')
+        self.main_config = snapshot[mosquitto.CHARM_CONFIG_FILENAME] or ''
+        self.bridge_config = snapshot[mosquitto.BRIDGE_CONFIG_FILENAME]
+        self.extra_config = snapshot[mosquitto.EXTRA_CONFIG_FILENAME] or ''
+
     def write_acl_file(
         self,
         file_paths: mosquitto.Paths,

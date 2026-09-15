@@ -462,4 +462,10 @@ storage:
     location: /var/lib/mosquitto
     minimum-size: 1G
     description: |
-      The broker's persistence database, password file, ACL file and backups.
+      The broker's persistence database and backups.
+
+      Note that on the archive and PPA install sources the password file, the ACL file
+      and the TLS material live under /etc/mosquitto and are therefore not on this
+      storage: detaching it does not carry the users. On the snap install source the
+      broker keeps everything under /var/snap/mosquitto/common instead, and this
+      storage is not used at all.
