@@ -60,7 +60,7 @@ Consequent choices:
 
 | Concern | Choice |
 | --- | --- |
-| Packaging | `apt`, from the archive by default | 
+| Packaging | `apt`, from the archive by default; `ppa` and `snap` available |
 | Charm libs | PyPI `charmlibs-*` throughout; no `charmcraft fetch-libs`, no vendored `lib/` |
 | TLS | `charmlibs-interfaces-tls-certificates` (not the v4 Charmhub lib), `Mode.UNIT` |
 | Observability | `COSAgentProvider` (`cos-agent`), works with grafana-agent and otelcol |
@@ -103,7 +103,7 @@ upgrade never changes behaviour silently.
 
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `install-source` | string | `archive` | `archive` or `ppa`. The archive has 2.0.18 with no standard security support; `ppa` gets 2.1.x from `ppa:mosquitto-dev/mosquitto-ppa`. |
+| `install-source` | string | `archive` | `archive`, `ppa` or `snap`. The archive has 2.0.18 with no standard security support; `ppa` gets 2.1.x from `ppa:mosquitto-dev/mosquitto-ppa`; `snap` gets 2.1.x strictly confined (see the note below). |
 
 **Listeners**
 
@@ -162,7 +162,7 @@ upgrade never changes behaviour silently.
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `open-file-limit` | int | `0` | 0 means "compute it": `max_connections + 1024`, floor 4096. Written as a systemd drop-in, which is the only thing that works for a service. |
-| `sysctl-tuning` | boolean | `false` | Opt-in, because it touches the host. When true, sets `somaxconn`, `tcp_max_syn_backlog`, `netdev_max_backlog`, `ip_local_port_range`. Degrades with a warning where the kernel namespace forbids it. |
+| `sysctl-tuning` | boolean | `true` | Sets `somaxconn`, `tcp_max_syn_backlog`, `netdev_max_backlog`, `ip_local_port_range`. Degrades with a warning where the kernel namespace forbids it (common in LXD containers), rather than failing the hook. Set `false` on a shared host. |
 
 **Escape hatch**
 
@@ -391,15 +391,18 @@ with these deltas:
 
 ## 12. Open questions for you
 
-1. **`charmcraft register mosquitto`** — shall I, or will you? (§2)
-2. **`install-source`**: I have dropped `snap` from the options. Strict confinement
-   forces every cert, password file and database under
-   `/var/snap/mosquitto/common/`, and snapd auto-refresh restarts the broker outside
-   the charm's control, which is wrong for a stateful single-node service. Happy to
-   add it back if you disagree.
-3. **`sysctl-tuning` default**: I have it `false` (opt-in, because it touches the
-   host). The fd limit — the constraint that actually bites — is handled
-   unconditionally. Would you rather it defaulted `true`?
-4. Should the 11,500 lines of raw research go into the repo (say `docs/research/`),
-   or stay out of it? It is good material but it is a lot, and WORKLOAD.md already
-   carries the operative conclusions.
+1. **`charmcraft register mosquitto`** — still unclaimed, and still unregistered. It
+   is outward-facing and irreversible, so it is yours to run when you are ready. It
+   is also the only definitive test that the name is free. (§2)
+
+Resolved during review:
+
+- **`snap` is an `install-source` option** after all. It carries two real costs, which
+  the charm must handle rather than hide: strict confinement means every certificate,
+  password file and database lives under `/var/snap/mosquitto/common/` rather than the
+  FHS paths, so the workload module keeps a path table per install source; and snapd
+  auto-refresh can restart the broker outside the charm's control, so the charm holds
+  the snap at a pinned revision and refreshes it only via the `upgrade` path.
+- **`sysctl-tuning` defaults to `true`**, degrading with a warning where the kernel
+  namespace forbids the write.
+- **The raw research is committed** under `docs/research/`.
