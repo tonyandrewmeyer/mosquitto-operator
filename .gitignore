@@ -1,0 +1,15 @@
+venv/
+build/
+*.charm
+.tox/
+.coverage
+__pycache__/
+*.py[cod]
+.idea
+.vscode/
+.claude/settings.local.json
+.ruff_cache/
+.pytest_cache/
+.venv/
+htmlcov/
+coverage.xml
