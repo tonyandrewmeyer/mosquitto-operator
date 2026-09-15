@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import time
 import shlex
 
 import helpers
@@ -136,14 +137,23 @@ def test_a_message_published_on_the_edge_arrives_at_the_central(juju: jubilant.J
     juju.run(CENTRAL_UNIT, 'grant', {'username': 'reader', 'topic': 'sensors/#', 'access': 'read'})
     juju.wait(jubilant.all_active, timeout=600)
 
-    assert publish(juju, EDGE_UNIT, TOPIC, 'sensor', PASSWORD)
+    # A bridge connects asynchronously — Mosquitto's own `restart_timeout` is 10 to 60
+    # seconds — so the first message can be published before the edge has finished
+    # connecting to the central broker. Retry rather than race it: the message is
+    # published retained, so a later subscribe still picks up the last one that crossed.
+    deadline = time.monotonic() + 180
+    received = ''
+    while True:
+        assert publish(juju, EDGE_UNIT, TOPIC, 'sensor', PASSWORD)
+        received = subscribe(juju, CENTRAL_UNIT, TOPIC, 'reader', PASSWORD)
+        if received == 'bridged' or time.monotonic() > deadline:
+            break
+        time.sleep(10)
 
-    received = subscribe(juju, CENTRAL_UNIT, TOPIC, 'reader', PASSWORD)
     assert received == 'bridged', (
-        'the message never crossed the bridge. Check the ACL the central broker '
-        'granted the edge: the charm constructs its upstream requirer with no topic '
-        'permissions, so the user the bridge authenticates as may have been granted '
-        'nothing at all.'
+        'the message never crossed the bridge within 180s. Check the bridge block on '
+        'the edge (/etc/mosquitto/conf.d/60-charm-bridge.conf) and the ACL the central '
+        'broker granted the user the bridge authenticates as.'
     )
 
 

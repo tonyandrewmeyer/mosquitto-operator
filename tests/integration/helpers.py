@@ -39,7 +39,9 @@ def service_is_running(juju: jubilant.Juju, unit: str, service: str = 'mosquitto
     `systemctl is-active` exits non-zero for a stopped service, and `Juju.exec` raises
     on a non-zero exit, so this has to tolerate failure rather than treat it as one.
     """
-    result = exec_allowed_to_fail(juju, unit, f'/bin/sh -c "systemctl is-active {service}"')
+    result = exec_allowed_to_fail(
+        juju, unit, f'/bin/sh -c "systemctl is-active {service}"', wait=120
+    )
     return result is not None and result.stdout.strip() == 'active'
 
 
@@ -104,4 +106,10 @@ def exec_allowed_to_fail(
     try:
         return juju.exec(command, unit=unit, wait=wait)
     except jubilant.TaskError:
+        return None
+    except TimeoutError:
+        # `juju exec` queues behind whatever hook the unit is running, so a check made
+        # straight after a configuration change or a removed integration can time out
+        # without saying anything about the thing being checked.
+        logger.info('Timed out running %s on %s; treating it as a failure.', command, unit)
         return None
