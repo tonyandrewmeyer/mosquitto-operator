@@ -745,6 +745,22 @@ def _remove_ppa() -> None:
             path.unlink()
 
 
+def different_packaging(one: str, other: str) -> bool:
+    """Whether two install sources put the broker on the machine in different ways.
+
+    The archive and the PPA are the same Debian package from different suites, so moving
+    between them upgrades or downgrades in place. The snap is a second broker.
+
+    Args:
+        one: One of `archive`, `ppa` or `snap`.
+        other: The same.
+
+    Returns:
+        True if moving from one to the other leaves the first one's package installed.
+    """
+    return (one == 'snap') != (other == 'snap')
+
+
 def uninstall(install_source: str) -> None:
     """Remove Mosquitto, leaving its data behind.
 

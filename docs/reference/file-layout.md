@@ -51,7 +51,7 @@ Everything moves under the snap's own common directory:
 | `/var/snap/mosquitto/common/acl` | The ACL file. |
 | `/var/snap/mosquitto/common/certs/` | TLS material. |
 | `/var/snap/mosquitto/common/data/` | The persistence database. |
-| `/var/snap/mosquitto/common/mosquitto.log` | The broker log. |
+| `/var/snap/mosquitto/common/mosquitto.log` | The broker log. Outside `/var/log`, so the COS collector does not scrape it. |
 | `/var/snap/mosquitto/common/backups/` | Backups. |
 
 The service is `snap.mosquitto.mosquitto` and the binaries are under

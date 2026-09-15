@@ -45,6 +45,14 @@ alert rules from `src/prometheus_alert_rules/`, and the dashboard from
 `src/grafana_dashboards/`. The exporter itself only runs while this integration
 exists. See [Metrics and alert rules](metrics.md).
 
+The endpoint is `limit: 1`: two collector subordinates on one machine would both
+scrape the broker and fight over the unit.
+
+Broker logs reach Loki because the collector scrapes `/var/log`, where the broker
+writes with `install-source` `archive` or `ppa`. A snap install writes its log
+under `/var/snap/mosquitto/common/` instead, which is not scraped; see
+[Upgrade and change install source](../how-to/upgrade-and-change-install-source.md).
+
 ## Required
 
 ### `certificates` (interface `tls-certificates`, limit 1)

@@ -354,6 +354,23 @@ def test_changing_the_install_source_migrates_the_state(
     old, new = fake.migrations[0]
     assert 'archive' in old
     assert 'snap' in new
+    # The deb is a whole second broker, held at a revision nothing updates and waiting
+    # to bind 1883 the next time something enables it.
+    assert fake.uninstalled == ['archive']
+    assert fake.running
+
+
+def test_moving_between_the_archive_and_the_ppa_uninstalls_nothing(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """They are the same package from different suites, so this upgrades in place."""
+    state_in = make_state(
+        peer=peer_relation(install_source='archive'), config={'install-source': 'ppa'}
+    )
+
+    ctx.run(ctx.on.config_changed(), state_in)
+
+    assert not fake.uninstalled
 
 
 # --------------------------------------------------------------------------------------

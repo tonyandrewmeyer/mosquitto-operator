@@ -75,6 +75,14 @@ drop-in, because snapd owns and regenerates those units — so `open-file-limit`
 has no effect — and it relies on the snap's own confinement instead of the
 sandboxing it adds to the deb service.
 
+The broker log moves too, to `/var/snap/mosquitto/common/mosquitto.log`, which is
+outside the `/var/log` trees the COS machine collectors scrape. **Broker logs are
+not forwarded to Loki on a snap install.** The broker cannot write to `/var/log`
+from inside strict confinement, so there is no charm-side fix; if you need the
+logs in Loki, use `install-source=ppa`, or collect the file yourself. Metrics,
+dashboards and alert rules are unaffected — the exporter is a charm-side service
+either way.
+
 ## Upgrade the charm
 
 ```shell

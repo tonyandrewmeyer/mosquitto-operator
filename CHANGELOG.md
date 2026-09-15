@@ -113,6 +113,14 @@ description of what the charm does rather than a list of changes to it.
   the machine by naming it.
 - `restore-backup` puts the password and ACL files back as 0o600, which is how
   they are written. The ACL file was being widened to 0o640.
+- Changing `install-source` between the archive or PPA and the snap now removes
+  the package it moved away from. The old broker was stopped and disabled but
+  left installed — a second Mosquitto on the machine, held at a revision nothing
+  updates in the snap's case, waiting to bind 1883.
+- Documents that broker logs are not forwarded to Loki with `install-source:
+  snap`: the log lives under `/var/snap`, outside the trees the COS machine
+  collectors scrape, and strict confinement means the broker cannot write to
+  `/var/log`.
 - Changing `bridge-topics` now republishes the request to the upstream broker,
   so the new topics are actually granted. The bridge previously forwarded
   topics the upstream broker had never granted it, and carried no traffic on

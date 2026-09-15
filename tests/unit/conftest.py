@@ -104,6 +104,9 @@ class FakeMosquitto:
         self.calls: list[str] = []
         self.installs: list[tuple[str, str]] = []
         self.uninstalled: list[str] = []
+        # Which source the fake believes the broker on the machine came from, once
+        # something has installed it. None means "whatever the test set up".
+        self.installed_source: str | None = None
         self.migrations: list[tuple[str, str]] = []
         self.users: dict[str, str] = {}
         self.rules: dict[str, collections.abc.Sequence[tuple[str, str]]] = {}
@@ -156,14 +159,19 @@ class FakeMosquitto:
         self.installs.append((install_source, channel))
         if self.install_error is not None:
             raise mosquitto.InstallError(self.install_error)
+        self.installed_source = install_source
         if self.version is None and self.installs_succeed:
             self.version = '2.0.18'
 
     def uninstall(self, install_source: str) -> None:
         self.calls.append('uninstall')
         self.uninstalled.append(install_source)
-        self.version = None
-        self.running = False
+        # Removing the source the broker was *not* installed from -- which is what the
+        # charm does after migrating between the deb and the snap -- leaves the running
+        # broker alone.
+        if self.installed_source in (None, install_source):
+            self.version = None
+            self.running = False
 
     def get_version(self, install_source: str = 'archive') -> str | None:
         return self.version
@@ -178,6 +186,8 @@ class FakeMosquitto:
         """
         self.calls.append('check_config')
         return self.rejection
+
+    different_packaging = staticmethod(mosquitto.different_packaging)
 
     def migrate_state(self, old: mosquitto.Paths, new: mosquitto.Paths) -> None:
         self.calls.append('migrate_state')

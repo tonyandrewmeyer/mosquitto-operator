@@ -573,6 +573,13 @@ class MosquittoCharm(ops.CharmBase):
             # holds every password in a Juju secret, so the cheapest correct thing is to
             # throw the file away and let the reconcile write a fresh one.
             paths.password_file.unlink(missing_ok=True)
+            # The old broker is stopped and disabled by the migration, but leaving its
+            # package installed leaves a second Mosquitto on the machine -- held at a
+            # revision nothing updates, in the snap's case -- waiting to bind 1883 the
+            # next time something enables it. Only across the deb/snap boundary: moving
+            # between the archive and the PPA upgrades the same package in place.
+            if mosquitto.different_packaging(previous, settings.install_source):
+                mosquitto.uninstall(previous)
         self._remember_install_source(settings.install_source)
 
         version = mosquitto.get_version(settings.install_source)
