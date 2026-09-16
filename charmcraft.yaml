@@ -436,6 +436,7 @@ actions:
 provides:
   mqtt:
     interface: mqtt
+    optional: true
     description: |
       Offer MQTT credentials and topic permissions to related applications. Each
       related application gets its own user, its own password in a Juju secret, and
@@ -446,6 +447,7 @@ provides:
     # different grafana-agent applications being deployed on the same machine, where
     # they would double-scrape the broker and fight over the unit.
     limit: 1
+    optional: true
     description: |
       Send metrics, logs, dashboards and alert rules to the Canonical Observability
       Stack, through a grafana-agent or opentelemetry-collector subordinate.
@@ -482,6 +484,7 @@ requires:
 peers:
   mosquitto-peers:
     interface: mosquitto-peers
+    optional: false
 
 storage:
   data:
