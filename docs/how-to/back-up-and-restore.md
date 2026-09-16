@@ -22,10 +22,15 @@ path: /var/lib/mosquitto/backups/mosquitto-20260915T110402Z.tar.gz
 size: "18423"
 ```
 
-To write it somewhere else — another filesystem, a mounted share — pass a path.
-It must not already exist: the backup is written as root, and refusing to write
-through a symlink or over an existing file is what stops an operator who can run
-actions turning that into a way to overwrite anything on the machine.
+To write it somewhere else — another filesystem, a mounted share — pass a path to
+a directory that already exists. The backup is written as root, so the charm
+treats the path as it treats a tarball being restored: it must not already exist,
+it must be absolute, the charm will not create directories outside its own backup
+directory, and it will not write into the places the system reads files from
+(`/etc`, `/usr`, `/bin`, `/sbin`, `/lib`, `/boot`, `/root`, `/run`, `/dev`,
+`/proc`, `/sys`, `/var/lib/juju`). Between them those stop an operator who can run
+actions but not `juju ssh` from using the action to overwrite a file, or to leave a
+root-owned one somewhere that matters.
 
 ```shell
 juju run mosquitto/0 create-backup path=/mnt/backups/mosquitto-nightly.tar.gz

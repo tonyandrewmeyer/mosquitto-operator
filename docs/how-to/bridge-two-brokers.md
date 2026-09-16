@@ -22,9 +22,10 @@ juju config mosquitto-edge install-source=ppa
 juju config mosquitto-central install-source=ppa
 ```
 
-If you skip this, everything else appears to work: the integration is made, the
-applications go active, and no bridge configuration is written. The refusal is in
-`juju debug-log`.
+If you skip this, the integration is made and no bridge configuration is written.
+The refusal is on the unit status of the application that would carry the bridge
+— `ready — …; the bridge is disabled: Mosquitto 2.0.18 is vulnerable to
+CVE-2024-3935 …` — as well as in `juju debug-log`.
 
 ## Deploy and integrate
 

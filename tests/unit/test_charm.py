@@ -305,11 +305,51 @@ def test_remove_uninstalls_and_drops_the_tuning(
 def test_remove_with_invalid_config_falls_back_to_the_archive_layout(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
+    """With nothing recorded there is nothing better to go on than the default."""
     state_in = make_state(config={'persistent-client-expiration': 'forever'})
 
     ctx.run(ctx.on.remove(), state_in)
 
     assert fake.uninstalled == ['archive']
+
+
+def test_remove_with_invalid_config_uses_the_recorded_install_source(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
+):
+    """Uninstalling by the configured source would run `apt` against a snap unit."""
+    state_in = make_state(
+        peer=peer_relation(install_source='snap'),
+        config={'persistent-client-expiration': 'forever'},
+    )
+
+    ctx.run(ctx.on.remove(), state_in)
+
+    assert fake.uninstalled == ['snap']
+
+
+@pytest.mark.parametrize('event', ['stop', 'storage-detaching'])
+def test_stopping_with_invalid_config_uses_the_recorded_install_source(
+    ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto, event: str
+):
+    """Stopping by the configured source would stop a service that does not exist.
+
+    `systemctl stop mosquitto` on a unit installed from the snap fails, and the detach
+    would then go ahead underneath a broker that is still running and still writing.
+    """
+    storage = testing.Storage('data')
+    fake.running = True
+    state_in = make_state(
+        peer=peer_relation(install_source='snap'),
+        config={'persistent-client-expiration': 'forever'},
+        storages={storage},
+    )
+
+    if event == 'stop':
+        ctx.run(ctx.on.stop(), state_in)
+    else:
+        ctx.run(ctx.on.storage_detaching(storage), state_in)
+
+    assert [paths.conf_dir for paths in fake.stopped] == [fake.paths('snap').conf_dir]
 
 
 def test_upgrade_reinstalls_and_reconciles(
@@ -979,6 +1019,48 @@ def test_grant_rejects_an_unknown_access_level(
         )
 
 
+@pytest.mark.parametrize(
+    ('action', 'params'),
+    [
+        ('grant', {'topic': 'sensors/#'}),
+        ('revoke', {'topic': 'sensors/#'}),
+    ],
+)
+def test_grant_and_revoke_refuse_a_user_an_integration_owns(
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    action: str,
+    params: dict[str, str],
+):
+    """The relation is the source of truth for these permissions.
+
+    Reconciling at the end of the action rewrites them from what the client asked for,
+    so an action that went ahead would report a permission the broker never has.
+    """
+    relation = testing.Relation(
+        'mqtt',
+        remote_app_name='telemetry',
+        remote_app_data=requirer_databag(('sensors/#', 'read')),
+    )
+    username = f'telemetry-{relation.id}'
+    state_in = make_state(
+        peer=peer_relation(
+            {username: {'owner': f'relation:{relation.id}', 'acl': [['sensors/#', 'read']]}}
+        ),
+        relations=[relation],
+        secrets=[user_secret(username, 'hunter2')],
+    )
+
+    with pytest.raises(testing.ActionFailed) as excinfo:
+        ctx.run(ctx.on.action(action, params={'username': username, **params}), state_in)
+
+    assert 'belongs to an integration' in excinfo.value.message
+    assert 'acl' not in (ctx.action_results or {})
+    # Refused outright: nothing was stored, and the broker was never reconfigured.
+    assert stored_users(state_in)[username]['acl'] == [['sensors/#', 'read']]
+    assert username not in fake.rules
+
+
 def test_revoke_removes_a_permission(
     ctx: testing.Context[charm.MosquittoCharm], fake: conftest.FakeMosquitto
 ):
@@ -1158,13 +1240,38 @@ def test_create_backup_at_a_chosen_path(
     fake: conftest.FakeMosquitto,
     tmp_path: pathlib.Path,
 ):
-    destination = tmp_path / 'somewhere' / 'backup.tar.gz'
+    """Another filesystem or a mounted share, which is what the how-to describes."""
+    share = tmp_path / 'somewhere'
+    share.mkdir()
+    destination = share / 'backup.tar.gz'
 
     ctx.run(ctx.on.action('create-backup', params={'path': str(destination)}), make_state())
 
     assert ctx.action_results is not None
     assert ctx.action_results['path'] == str(destination)
     assert destination.is_file()
+
+
+@pytest.mark.parametrize(
+    ('destination', 'reason'),
+    [
+        ('/etc/cron.d/charm-eval', 'where the charm will not create files'),
+        ('backups/nightly.tar.gz', 'not an absolute path'),
+    ],
+)
+def test_create_backup_refuses_a_destination_it_should_not_create(
+    ctx: testing.Context[charm.MosquittoCharm],
+    fake: conftest.FakeMosquitto,
+    destination: str,
+    reason: str,
+):
+    """Not overwriting is not enough: creating a root-owned file is itself the risk."""
+    with pytest.raises(testing.ActionFailed) as excinfo:
+        ctx.run(ctx.on.action('create-backup', params={'path': destination}), make_state())
+
+    assert reason in excinfo.value.message
+    assert not fake.backups
+    assert not pathlib.Path(destination).exists()
 
 
 def test_create_backup_refuses_to_overwrite(

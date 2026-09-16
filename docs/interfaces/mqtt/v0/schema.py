@@ -39,7 +39,7 @@ Examples:
             "granted-permissions": [
                 {"filter": "sensors/+/temperature", "access": "read"}
             ],
-            "client-id-prefix": "telemetry-",
+            "client-id-prefix": null,
             "tls-ca": "-----BEGIN CERTIFICATE-----...",
             "mqtt-version": "5.0",
             "error": null
@@ -223,7 +223,10 @@ class MQTTProviderAppData(pydantic.BaseModel):
     client_id_prefix: str | None = pydantic.Field(
         default=None,
         alias='client-id-prefix',
-        description='The MQTT client ID prefix actually reserved for the requirer.',
+        description=(
+            'The MQTT client ID prefix actually reserved for the requirer. Optional:'
+            ' a broker with no way to reserve one leaves this unset.'
+        ),
         examples=['telemetry-'],
         title='Client ID prefix',
     )

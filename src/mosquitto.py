@@ -52,6 +52,25 @@ EXPORTER_INSTALL_PATH = pathlib.Path('/usr/local/lib/mosquitto-charm/exporter.py
 DROPIN_DIR_TEMPLATE = '/etc/systemd/system/{service}.service.d'
 DROPIN_FILENAME = '90-charm.conf'
 
+# Directories where creating a file changes how the machine behaves rather than where
+# anyone keeps a backup. `create-backup` writes as root, so without this an operator
+# who can run actions but cannot `juju ssh` could drop a new root-owned file into any
+# of them. `/var` as a whole is not here: the default backup directory is under it.
+RESERVED_BACKUP_PREFIXES = (
+    pathlib.Path('/bin'),
+    pathlib.Path('/boot'),
+    pathlib.Path('/dev'),
+    pathlib.Path('/etc'),
+    pathlib.Path('/lib'),
+    pathlib.Path('/proc'),
+    pathlib.Path('/root'),
+    pathlib.Path('/run'),
+    pathlib.Path('/sbin'),
+    pathlib.Path('/sys'),
+    pathlib.Path('/usr'),
+    pathlib.Path('/var/lib/juju'),
+)
+
 # Usernames the charm reserves for itself. Operators cannot create these, so an
 # operator-created user can never inherit the broker-wide `$SYS` read grant.
 HEALTH_USER = '_charm_health'
@@ -1817,6 +1836,45 @@ def sys_snapshot(
     return snapshot
 
 
+def check_backup_destination(file_paths: Paths, destination: pathlib.Path) -> None:
+    """Check that a backup may be written to an operator-supplied path.
+
+    Backups are written as root, so the destination is as much attacker-controlled
+    input as a restored tarball is. Anywhere under the charm's own backup directory is
+    always fine; anywhere else has to be an existing directory -- so that the action
+    cannot build a tree of its own somewhere unexpected -- outside the directories
+    where a new root-owned file means something to the system.
+
+    The parent is resolved before it is checked, so a symlinked directory cannot be
+    used to land the file somewhere the checks would have refused.
+
+    Args:
+        file_paths: Where Mosquitto's files live.
+        destination: The operator-supplied path.
+
+    Raises:
+        Error: If the backup must not be written there.
+    """
+    if not destination.is_absolute():
+        raise Error(f'{destination} is not an absolute path')
+    parent = destination.parent.resolve()
+    resolved = parent / destination.name
+    if resolved.is_relative_to(file_paths.backup_dir.resolve()):
+        return
+    for prefix in RESERVED_BACKUP_PREFIXES:
+        if resolved.is_relative_to(prefix):
+            raise Error(
+                f'{destination} is under {prefix}, where the charm will not create '
+                f'files. Write the backup under {file_paths.backup_dir} or to a '
+                f'directory you keep backups in'
+            )
+    if not parent.is_dir():
+        raise Error(
+            f'{destination.parent} is not an existing directory. Create it first, or '
+            f'write the backup under {file_paths.backup_dir}'
+        )
+
+
 def create_backup(file_paths: Paths, destination: pathlib.Path | None = None) -> pathlib.Path:
     """Back up everything that would be needed to rebuild this broker.
 
@@ -1835,7 +1893,11 @@ def create_backup(file_paths: Paths, destination: pathlib.Path | None = None) ->
     if destination is None:
         stamp = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
         destination = file_paths.backup_dir / f'mosquitto-{stamp}.tar.gz'
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Only ever the charm's own directory: `check_backup_destination` requires that
+    # anywhere else already exists, so that the action cannot create directories of its
+    # own outside the tree the charm manages.
+    if destination.parent.is_relative_to(file_paths.backup_dir):
+        destination.parent.mkdir(parents=True, exist_ok=True)
 
     sources: list[pathlib.Path] = [path for path in file_paths.managed_files() if path.exists()]
     # The persistence database is written on autosave, so this copy is a point in time

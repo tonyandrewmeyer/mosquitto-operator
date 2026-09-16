@@ -70,12 +70,40 @@ description of what the charm does rather than a list of changes to it.
 
 ### Changed
 
+- The `mqtt/v0` interface documents `client-id-prefix` as something a provider
+  *may* publish rather than something it does. Mosquitto has no way to reserve a
+  client ID prefix, so this charm publishes none, and a requirer is expected to
+  choose its own client ID when none is published. `mtls-cert` is likewise
+  documented as reserved for a later version, with no provider behaviour in v0.
+- The security model documents the bridge configuration fragment as a place a
+  remote broker's password sits in plain text, which is the one credential the
+  charm cannot protect any further: Mosquitto will read a bridge password from
+  nowhere else.
+
 ### Deprecated
 
 ### Removed
 
 ### Fixed
 
+- `grant` and `revoke` refuse a user that came from an `mqtt` integration, as
+  `remove-user` already did. Those permissions are rewritten from the relation
+  during the very reconciliation the action performs, so the action reported a
+  permission the broker had already dropped.
+- `create-backup` will not create a root-owned file wherever it is pointed. A
+  destination outside the charm's backup directory has to be an absolute path in
+  a directory that already exists, and never under `/etc`, `/usr`, `/bin`,
+  `/sbin`, `/lib`, `/boot`, `/root`, `/run`, `/dev`, `/proc`, `/sys` or
+  `/var/lib/juju`. The parent is resolved first, so a symlinked directory is not
+  a way around it. Backups to a mounted share still work.
+- `stop`, `storage-detaching` and `remove` operate the broker through the
+  install source it was installed from, recorded in the peer relation, rather
+  than the configured one. On a snap unit whose configuration had become
+  invalid, the charm reached for `systemctl stop mosquitto` and `apt`, failed,
+  and let Juju detach the storage underneath a running broker.
+- The `MosquittoExporterDown` alert names the service the charm actually
+  installs, `mosquitto-charm-exporter`. The runbook text sent an operator
+  looking for `mosquitto-exporter`, which is not on the unit.
 - The metrics exporter listens on `127.0.0.1` rather than on the unit's private
   address. The `cos_agent` library builds its scrape target as
   `localhost:<metrics-port>` and the collector is a subordinate on the same

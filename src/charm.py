@@ -173,9 +173,26 @@ class MosquittoCharm(ops.CharmBase):
         return settings.metrics_port if settings else 9234
 
     def _paths(self) -> mosquitto.Paths:
-        """Where Mosquitto's files live, for the configured install source."""
+        """Where Mosquitto's files live, for the source the broker is installed from."""
+        return mosquitto.paths(self._install_source())
+
+    def _install_source(self) -> str:
+        """The source to operate the installed broker through.
+
+        Normally that is the configured one, since reconciliation makes the installed
+        broker match it. When the configuration is invalid there is no configured
+        source to read, and falling back to the default would have the stop and remove
+        paths reach for `systemctl` and `apt` on a unit installed from the snap. What
+        the broker was actually installed from is recorded in the peer databag, so
+        prefer that, and only fall back to the default when there is nothing recorded.
+
+        Returns:
+            One of `archive`, `ppa` or `snap`.
+        """
         settings = self._config
-        return mosquitto.paths(settings.install_source if settings else 'archive')
+        if settings is not None:
+            return settings.install_source
+        return self._previous_install_source() or 'archive'
 
     def _bridge_permissions(self) -> tuple[mqtt.TopicPermission, ...]:
         """What to ask the upstream broker for, derived from `bridge-topics`.
@@ -367,9 +384,8 @@ class MosquittoCharm(ops.CharmBase):
 
     def _on_remove(self, event: ops.RemoveEvent) -> None:
         """Remove Mosquitto, leaving the data behind for the storage to carry."""
-        settings = self._config
         mosquitto.apply_sysctl(enabled=False)
-        mosquitto.uninstall(settings.install_source if settings else 'archive')
+        mosquitto.uninstall(self._install_source())
 
     def _on_upgrade(self, event: ops.UpgradeCharmEvent) -> None:
         """Reinstall as needed and reconcile after a charm upgrade."""
@@ -1102,6 +1118,19 @@ class MosquittoCharm(ops.CharmBase):
             )
 
     @staticmethod
+    def _relation_owned(record: Mapping[str, object]) -> bool:
+        """Whether this user belongs to an `mqtt` integration rather than to an operator.
+
+        Args:
+            record: one entry from the user list.
+
+        Returns:
+            True if the next reconciliation would rewrite this user from the relation.
+        """
+        owner = record.get('owner')
+        return isinstance(owner, str) and owner.startswith('relation:')
+
+    @staticmethod
     def _stored_acl(record: Mapping[str, object]) -> list[list[str]]:
         """The topic permissions recorded for one user.
 
@@ -1330,8 +1359,7 @@ class MosquittoCharm(ops.CharmBase):
         if record is None:
             event.fail(f'There is no user called {params.username}.')
             return
-        owner = record.get('owner')
-        if isinstance(owner, str) and owner.startswith('relation:'):
+        if self._relation_owned(record):
             # The request that created this user is still on the relation, so the next
             # reconcile would create it again -- with the same password, since that is
             # in a secret this action does not touch. Removing the integration is the
@@ -1381,6 +1409,17 @@ class MosquittoCharm(ops.CharmBase):
                 f'set-password action first.'
             )
             return
+        if self._relation_owned(record):
+            # The permissions of a relation user are whatever the requirer asked for:
+            # the reconciliation at the end of this action would rewrite them from the
+            # relation again, so granting here reports a permission the broker never
+            # gets. Refuse rather than lie about it.
+            event.fail(
+                f'{params.username} belongs to an integration, and its permissions '
+                f'come from what the client asks for. Change the request on the '
+                f'client charm instead.'
+            )
+            return
         acl = [entry for entry in self._stored_acl(record) if entry[0] != params.topic]
         acl.append([params.topic, str(params.access)])
         record['acl'] = sorted(acl)
@@ -1398,6 +1437,15 @@ class MosquittoCharm(ops.CharmBase):
         record = users.get(params.username)
         if record is None:
             event.fail(f'There is no user called {params.username}.')
+            return
+        if self._relation_owned(record):
+            # As for `grant`: the relation is the source of truth for these, and the
+            # reconciliation below would put the permission straight back.
+            event.fail(
+                f'{params.username} belongs to an integration, and its permissions '
+                f'come from what the client asks for. Remove the integration with '
+                f'`juju remove-relation` to take them away.'
+            )
             return
         stored = self._stored_acl(record)
         acl = [entry for entry in stored if entry[0] != params.topic]
@@ -1521,16 +1569,22 @@ class MosquittoCharm(ops.CharmBase):
         params = event.load_params(config.CreateBackupParams, errors='fail')
         paths = self._paths()
         destination = pathlib.Path(params.path) if params.path else None
-        if destination is not None and destination.exists():
+        if destination is not None:
             # The backup is written as root, so an operator who can run actions but not
             # `juju ssh` could otherwise truncate any file on the machine by naming it
-            # here. `restore-backup` validates its path carefully; this is the same
-            # boundary, on the way out.
-            event.fail(
-                f'{destination} already exists. Choose a path that does not, or omit '
-                f'`path` to write a timestamped backup to {paths.backup_dir}.'
-            )
-            return
+            # here, or create a root-owned one somewhere the system reads. `restore-backup`
+            # validates its path carefully; this is the same boundary, on the way out.
+            if destination.exists():
+                event.fail(
+                    f'{destination} already exists. Choose a path that does not, or omit '
+                    f'`path` to write a timestamped backup to {paths.backup_dir}.'
+                )
+                return
+            try:
+                mosquitto.check_backup_destination(paths, destination)
+            except mosquitto.Error as e:
+                event.fail(f'Cannot write the backup there: {e}.')
+                return
         try:
             path = mosquitto.create_backup(paths, destination)
         except mosquitto.Error as e:

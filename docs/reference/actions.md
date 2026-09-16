@@ -80,7 +80,10 @@ Grant a user access to a topic filter. **Leader only.**
 | `acl` | JSON: the user's permissions after the grant. |
 
 Granting a topic the user already has replaces the earlier access rather than
-adding a second rule. Fails if there is no such user.
+adding a second rule. Fails if there is no such user, and fails for a user that
+came from an `mqtt` integration: those permissions are whatever the client asked
+for, and the next reconciliation would write them back. Change what the client
+charm requests instead.
 
 ### `revoke`
 
@@ -96,7 +99,9 @@ Remove a topic permission from a user. **Leader only.**
 | `username` | The user that was changed. |
 | `acl` | JSON: the user's remaining permissions. |
 
-Fails if the user has no permission for that topic.
+Fails if the user has no permission for that topic, and fails for a user that
+came from an `mqtt` integration, for the same reason as `grant`: remove the
+integration to take its permissions away.
 
 ## Inspection
 
@@ -159,6 +164,12 @@ fragments and TLS material to a tarball on the unit.
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `path` | string | no | Where to write the tarball. Defaults to a timestamped file under `/var/lib/mosquitto/backups/`. |
+
+The path must not already exist, must be absolute, and outside the backup
+directory must name a directory that already exists and is not under `/etc`,
+`/usr`, `/bin`, `/sbin`, `/lib`, `/boot`, `/root`, `/run`, `/dev`, `/proc`,
+`/sys` or `/var/lib/juju`. The backup is written as root, so the action is not a
+way to put a root-owned file wherever the system will read one.
 
 | Result | Meaning |
 | --- | --- |

@@ -738,6 +738,84 @@ def test_a_backup_refuses_a_destination_that_appeared(tmp_path: pathlib.Path):
     assert destination.read_text() == 'someone got here first'
 
 
+def test_a_backup_destination_in_the_backup_directory_is_allowed(tmp_path: pathlib.Path):
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+
+    mosquitto.check_backup_destination(paths, paths.backup_dir / 'nightly' / 'backup.tar.gz')
+
+
+def test_a_backup_destination_elsewhere_needs_a_directory_that_exists(
+    tmp_path: pathlib.Path,
+):
+    """Otherwise the action builds a tree of its own wherever it is pointed."""
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+    share = tmp_path / 'mnt' / 'backups'
+
+    with pytest.raises(mosquitto.Error, match='not an existing directory'):
+        mosquitto.check_backup_destination(paths, share / 'backup.tar.gz')
+
+    share.mkdir(parents=True)
+    mosquitto.check_backup_destination(paths, share / 'backup.tar.gz')
+
+
+@pytest.mark.parametrize(
+    'destination',
+    [
+        '/etc/cron.d/charm-eval',
+        '/etc/mosquitto/backup.tar.gz',
+        '/usr/local/bin/backup.tar.gz',
+        '/var/lib/juju/backup.tar.gz',
+        '/root/backup.tar.gz',
+    ],
+)
+def test_a_backup_refuses_a_destination_the_system_reads(tmp_path: pathlib.Path, destination: str):
+    """The backup is written as root, so creating a file is itself the privilege.
+
+    Nothing is overwritten -- the action checks that first, and the open is `O_EXCL` --
+    but a new root-owned file in one of these directories is a way to change what the
+    machine does, and an operator who can run actions should not have one.
+    """
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+
+    with pytest.raises(mosquitto.Error, match='where the charm will not create files'):
+        mosquitto.check_backup_destination(paths, pathlib.Path(destination))
+
+
+def test_a_backup_destination_is_checked_after_its_directory_is_resolved(
+    tmp_path: pathlib.Path,
+):
+    """A symlinked directory would otherwise be a way around the check."""
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+    link = tmp_path / 'looks-harmless'
+    link.symlink_to('/etc')
+
+    with pytest.raises(mosquitto.Error, match='where the charm will not create files'):
+        mosquitto.check_backup_destination(paths, link / 'cron.d' / 'charm-eval')
+
+
+def test_a_backup_refuses_a_relative_destination(tmp_path: pathlib.Path):
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+
+    with pytest.raises(mosquitto.Error, match='not an absolute path'):
+        mosquitto.check_backup_destination(paths, pathlib.Path('backup.tar.gz'))
+
+
+def test_a_backup_creates_no_directories_outside_its_own(tmp_path: pathlib.Path):
+    """`check_backup_destination` has already required the directory to exist."""
+    paths = layout(tmp_path)
+    mosquitto.ensure_directories(paths)
+
+    with pytest.raises(mosquitto.Error, match='could not write the backup'):
+        mosquitto.create_backup(paths, tmp_path / 'not-there' / 'backup.tar.gz')
+
+    assert not (tmp_path / 'not-there').exists()
+
+
 # --- WebSocket listeners -----------------------------------------------------
 
 

@@ -62,9 +62,10 @@ groups:
           description: >-
             Prometheus cannot reach the exporter, so broker metrics are missing
             and every other rule in this file is blind. Check
-            `systemctl status mosquitto-exporter` on the unit, and confirm that
-            the exporter is listening on `127.0.0.1` on the configured
-            `metrics-port`, which is where the co-located collector scrapes it.
+            `systemctl status mosquitto-charm-exporter` on the unit, and
+            confirm that the exporter is listening on `127.0.0.1` on the
+            configured `metrics-port`, which is where the co-located collector
+            scrapes it.
 
       # The uptime counter went backwards, which only happens across a restart.
       - alert: MosquittoRestarted

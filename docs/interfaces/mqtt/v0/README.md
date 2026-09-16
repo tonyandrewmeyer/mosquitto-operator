@@ -56,6 +56,12 @@ considered compatible with this interface.
 - Is expected to publish `granted-permissions` reflecting the access control entries
   actually installed, which may be narrower than `topic-permissions`.
 - Is expected to publish `tls-ca` whenever any published endpoint has `tls` set.
+- **May** publish `client-id-prefix`, and is not expected to. A broker that cannot
+  reserve a client ID prefix — Mosquitto has no mechanism for it — is expected to leave
+  the field unset rather than to publish a prefix it does not enforce.
+- Is not expected to do anything with `mtls-cert` in this version of the interface. The
+  field is part of the requirer schema so that mutual TLS can be added without a version
+  bump; until then a provider may ignore it.
 - Is expected to publish `error`, and not to publish credentials, when a request cannot
   be satisfied. It is expected to leave credentials it has already published in place,
   so that a later refused request does not disconnect a working client.
@@ -73,7 +79,9 @@ considered compatible with this interface.
 - Is expected to tolerate an unknown enumeration value, treating it as `UNKNOWN`, and to
   tolerate fields it does not recognise.
 - Is expected to connect with a client ID beginning with the `client-id-prefix` the
-  provider published, when one was published.
+  provider published, when one was published, and to choose its own client ID when the
+  provider published none. A provider that publishes nothing has reserved nothing; this
+  is the usual case, and is not an error.
 
 ### Both
 
@@ -101,7 +109,7 @@ The provider writes to its **application** databag.
 | `endpoints` | `frozenset[Endpoint] \| None` | The listeners the requirer may connect to. |
 | `secret-user` | `str \| None` | The URI of a Juju secret holding `{username, password}`. |
 | `granted-permissions` | `frozenset[TopicPermission] \| None` | The access control entries actually installed. |
-| `client-id-prefix` | `str \| None` | The MQTT client ID prefix reserved for the requirer. |
+| `client-id-prefix` | `str \| None` | The MQTT client ID prefix reserved for the requirer. Optional; unset means nothing was reserved. |
 | `tls-ca` | `str \| None` | The CA chain that signs the broker's certificate, in PEM form. |
 | `mqtt-version` | `str \| None` | The highest MQTT protocol version the broker supports. |
 | `error` | `Error \| None` | Why the request could not be satisfied. |
@@ -131,7 +139,7 @@ relation-info:
                    {"host": "10.1.2.3", "port": 8883, "tls": true, "protocol": "mqtt"}]'
       secret-user: '"secret:cvh7kruupa1s46bqvuig"'
       granted-permissions: '[{"filter": "sensors/+/temperature", "access": "read"}]'
-      client-id-prefix: '"telemetry-"'
+      client-id-prefix: 'null'
       tls-ca: '"-----BEGIN CERTIFICATE-----\n..."'
       mqtt-version: '"5.0"'
       error: 'null'
@@ -156,7 +164,7 @@ The requirer writes to its **application** databag.
 | `topic-permissions` | `frozenset[TopicPermission] \| None` | The filters and access the requirer wants. |
 | `client-id-prefix` | `str \| None` | The MQTT client ID prefix the requirer wants reserved. |
 | `requested-secrets` | `frozenset[SecretRequest] \| None` | The provider fields to deliver through a Juju secret. |
-| `mtls-cert` | `str \| None` | The requirer's client certificate, when it authenticates with mutual TLS. |
+| `mtls-cert` | `str \| None` | The requirer's client certificate, when it authenticates with mutual TLS. Reserved: no provider behaviour is specified for it in v0. |
 
 `TopicPermission` is `{filter, access}`. `filter` is an MQTT topic filter, so `+`
 matches one level and `#` matches the remainder; Mosquitto's `%u` and `%c`

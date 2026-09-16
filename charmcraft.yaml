@@ -338,7 +338,9 @@ actions:
       are never returned.
     additionalProperties: false
   grant:
-    description: Grant a user access to a topic filter.
+    description: |
+      Grant a user access to a topic filter. Refused for a user that came from an
+      `mqtt` integration, whose permissions are whatever the client asked for.
     params:
       username:
         type: string
@@ -355,7 +357,9 @@ actions:
     required: [username, topic]
     additionalProperties: false
   revoke:
-    description: Remove a topic permission from a user.
+    description: |
+      Remove a topic permission from a user. Refused for a user that came from an
+      `mqtt` integration; remove the integration instead.
     params:
       username:
         type: string
@@ -398,9 +402,11 @@ actions:
         type: string
         description: |
           Where to write the tarball. Defaults to a timestamped file under
-          /var/lib/mosquitto/backups/. The file must not already exist: the
-          backup is written as root, so overwriting an arbitrary path is
-          refused.
+          /var/lib/mosquitto/backups/. The backup is written as root, so the
+          file must not already exist, and outside the backup directory the
+          path must be an absolute one in a directory that already exists and
+          is not one the system reads files from (/etc, /usr, /bin, /sbin,
+          /lib, /boot, /root, /run, /dev, /proc, /sys, /var/lib/juju).
     additionalProperties: false
   restore-backup:
     description: |

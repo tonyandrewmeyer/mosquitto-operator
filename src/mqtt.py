@@ -464,7 +464,10 @@ class ProviderAppData(pydantic.BaseModel):
     )
     client_id_prefix: str | None = pydantic.Field(
         default=None,
-        description='The MQTT client ID prefix actually reserved for the requirer.',
+        description=(
+            'The MQTT client ID prefix actually reserved for the requirer. Optional:'
+            ' a broker with no way to reserve one leaves this unset.'
+        ),
         examples=['telemetry-'],
         title='Client ID prefix',
     )

@@ -95,6 +95,24 @@ privileges to its own user *before* opening the certificate and key, so a key
 that only root can read is the usual reason a broker will not start after a
 certificate renewal.
 
+### The bridge password is on disk in the clear
+
+One credential cannot be protected any further than that, and it is worth naming.
+When the charm bridges to an upstream broker it writes `60-charm-bridge.conf` in
+the fragment directory (`/etc/mosquitto/conf.d/` on a package install), and that
+file contains a `remote_password` line in plain text. Mosquitto has no other way
+to be given a bridge password: there is no credential file, no environment
+variable and no keyring it will read. The password reaches the unit in a Juju
+secret on the `upstream` integration, and then has to be written out in the clear.
+
+So the charm does what it can — the fragment is `0640` `mosquitto:mosquitto`, and
+nothing logs it — and the accepted risk is that anyone who can read files as
+`root` or as the `mosquitto` user on the unit can read the upstream broker's
+password. The upstream charm gives the bridge a user of its own, granted only the
+bridged topics, so what a reader gets is scoped to the bridge rather than to the
+whole upstream broker. A backup tarball contains this fragment, which is one of
+the reasons the tarball is `0600`.
+
 ## systemd sandboxing instead of AppArmor
 
 Ubuntu 24.04 ships no AppArmor profile for Mosquitto. The package's `postinst`

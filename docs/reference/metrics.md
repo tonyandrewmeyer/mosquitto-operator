@@ -19,6 +19,11 @@ is not 0, and the plaintext listener is enabled — it reads `$SYS` over loopbac
 authenticating as the charm's `_charm_metrics` user, whose only permission is
 `read $SYS/#`.
 
+On the unit it is the systemd service `mosquitto-charm-exporter`, which is what
+to name to `systemctl status` and `journalctl -u` when metrics stop arriving. On
+a snap install it is the same service, since the exporter is the charm's own
+rather than the snap's.
+
 ## Counters
 
 Monotonic totals since the broker started, so these are the ones to use with

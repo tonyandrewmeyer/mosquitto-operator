@@ -94,6 +94,9 @@ class FakeMosquitto:
     supports_bridging = staticmethod(mosquitto.supports_bridging)
     version_tuple = staticmethod(mosquitto.version_tuple)
     generate_password = staticmethod(mosquitto.generate_password)
+    # The real check: the paths it is given are the fake's, under the temporary
+    # directory, and what it decides about them is what the charm relies on.
+    check_backup_destination = staticmethod(mosquitto.check_backup_destination)
 
     def __init__(self, root: pathlib.Path, *, version: str | None = '2.0.18'):
         self.root = root
@@ -122,6 +125,9 @@ class FakeMosquitto:
         self.last_change: mosquitto.Change | None = None
         self.exporter = ExporterState()
         self.backups: list[pathlib.Path] = []
+        # The layouts the broker was stopped through, so that a test can tell a
+        # snap unit being stopped from a package one.
+        self.stopped: list[mosquitto.Paths] = []
         self.restored: list[pathlib.Path] = []
         # Knobs the tests turn to make the machine misbehave.
         self.installs_succeed = True
@@ -326,6 +332,7 @@ class FakeMosquitto:
 
     def stop(self, file_paths: mosquitto.Paths) -> None:
         self.calls.append('stop')
+        self.stopped.append(file_paths)
         if self.stop_error is not None:
             raise mosquitto.ServiceError(self.stop_error)
         self.running = False
