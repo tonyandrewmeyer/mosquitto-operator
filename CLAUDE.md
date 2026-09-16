@@ -2,24 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Custom Skills
-
-Before working on tasks, check for relevant skills in `.claude/skills/`. Available skills:
-- `charmcraft` — `.claude/skills/charmcraft/SKILL.md` — pack charms, fetch libraries
-- `concierge` — `.claude/skills/concierge/SKILL.md` — set up dev and test environments
-- `jhack` — `.claude/skills/jhack/SKILL.md` — diagnostic tools for charming
-- `juju` — `.claude/skills/juju/SKILL.md` — operate a Juju controller: deploy, configure, integrate, debug
-- `migrate-to-jubilant` — `.claude/skills/migrate-to-jubilant/SKILL.md` — tools for migrating charm integration tests from pytest-operator and python-libjuju, or from pytest-jubilant 1.x, to pytest-jubilant 2.0 and Jubilant
-- `juju-doctor` — `.claude/skills/juju-doctor/SKILL.md` — validate deployments with probes
-- `go-standards` — `.claude/skills/go-standards/SKILL.md` — Canonical Go coding standards
-- `cli-standards` — `.claude/skills/cli-standards/SKILL.md` — Canonical CLI design standards
-- `code-review` — `.claude/skills/code-review/SKILL.md` — code review guidelines
-- `charm-logging` — `.claude/skills/charm-logging/SKILL.md` — charm logging level guidelines
-- `charm-development-commands` — `.claude/skills/charm-development-commands/SKILL.md` — standard commands to make available for developing and testing charms
-- `charm-docs` — `.claude/skills/charm-docs/SKILL.md` — charm documentation guidelines
-
-Read the appropriate SKILL.md before starting any related work.
-
 ## Juju, Pebble, and Charms
 
 We are building a *charm* to be deployed on a *Juju* controller. All the information you need about Juju can be found at https://documentation.ubuntu.com/juju/latest/
