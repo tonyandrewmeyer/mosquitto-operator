@@ -302,8 +302,8 @@ def test_removing_the_extra_unit_returns_the_application_to_active(juju: jubilan
     # No version skip. Juju 4.x does not clean up *peer* relation membership when a
     # unit is removed -- `relation-list` on the surviving unit still returns the
     # removed one twenty-five minutes later, and `mosquitto-peers-relation-departed`
-    # never fires, which left the charm blocked for ever when it counted peers (see
-    # contrib/juju-peer-departed-reproducer/). The charm takes the unit count from
-    # goal state instead, which is correct on both, and reconciles it on
-    # `update-status` as well as on the departed hook that 3.6 does send.
+    # never fires, which left the charm blocked for ever when it counted peers. The
+    # charm takes the unit count from goal state instead, which is correct on both,
+    # and reconciles it on `update-status` as well as on the departed hook that 3.6
+    # does send.
     juju.wait(jubilant.all_active, timeout=900)
